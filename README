@@ -1,0 +1,54 @@
+Qore Kalman module (kalman)
+
+INTRODUCTION
+------------
+The Qore kalman module provides Kalman filter bindings on top of
+Eigen (https://eigen.tuxfamily.org), the header-only C++ template
+linear-algebra library. Kalman filters are the standard approach for
+denoising / tracking / sensor-fusing noisy sequential observations —
+their canonical applications are navigation (GPS/INS fusion, object
+tracking), control systems, sensor processing in IoT and industrial
+monitoring, and smoothing noisy time series in finance.
+
+The module exposes three filter classes and a matrix primitive:
+
+Classes provided:
+    - Matrix:         columnar dense matrix (Eigen-backed); arithmetic,
+                      transpose, inverse, cholesky, determinant.
+    - LinearFilter:   standard Kalman filter (LKF) for linear systems.
+    - ExtendedFilter: extended Kalman filter (EKF) for non-linear
+                      dynamics / observations via Qore callbacks
+                      returning Jacobians.
+
+Pre-baked business-case helpers (1.1+):
+    - ConstantVelocity2D / ConstantAcceleration2D / GpsSmoother —
+      one-call construction of correctly-parameterised filters for
+      common tracking problems.
+
+Standalone functions:
+    - kalman_version():   module version string.
+    - get_kalman_info():  structured version info.
+
+Thread safety: Matrix is immutable after construction (methods return
+new matrices); filter objects hold mutable state and must not be
+shared across threads without external locking.
+
+DEPENDENCIES
+------------
+    - Eigen >= 3.3 (header-only; no runtime library)
+
+BUILD
+-----
+    mkdir build && cd build
+    cmake ..
+    make
+    sudo make install
+
+Requires a Qore development installation (qore-config, qpp) and Eigen
+development headers.
+
+Matching distribution packages:
+    - Ubuntu / Debian:  apt install libeigen3-dev
+    - Alpine:           apk add eigen-dev
+    - Fedora / RHEL:    dnf install eigen3-devel
+    - macOS (Homebrew): brew install eigen

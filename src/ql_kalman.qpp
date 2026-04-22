@@ -1,0 +1,124 @@
+/* -*- mode: c++; indent-tabs-mode: nil -*- */
+/*
+    ql_kalman.qpp
+
+    Qore Programming Language
+
+    Copyright (C) 2026 Qore Technologies, s.r.o.
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+*/
+
+#include "kalman-module.h"
+
+#include <cstdlib>
+#include <cstring>
+
+//! Kalman module version info hash.
+/** Contains parsed version information for this module.
+*/
+hashdecl KalmanVersionInfo {
+    //! Full version string (e.g., @c "1.0.0")
+    string version;
+    //! Major version number
+    int major;
+    //! Minor version number
+    int minor;
+    //! Patch version number
+    int patch;
+}
+
+//! @ref LinearFilter constructor options.
+/** Fixes the shape of the filter. State and measurement sizes cannot
+    be changed after construction.
+*/
+hashdecl LinearFilterOptions {
+    //! Size of the state vector (positive integer, required).
+    int state_size;
+    //! Size of the measurement vector (positive integer, required).
+    int measurement_size;
+    //! Size of the control input vector (non-negative integer; default 0, meaning no control).
+    *int control_size;
+}
+
+//! Snapshot of a Kalman filter's state at a point in time.
+/** Returned by @ref LinearFilter::state() and
+    @ref ExtendedFilter::state(). The pair (\c state, \c covariance)
+    fully describes the filter's belief about the underlying system.
+*/
+hashdecl KalmanFilterState {
+    //! State vector as a column @ref Matrix (state_size x 1).
+    object state;
+    //! Covariance @ref Matrix (state_size x state_size).
+    object covariance;
+    //! Total number of updates applied since construction.
+    int update_count;
+    //! Total number of predictions applied since construction.
+    int predict_count;
+}
+
+/** @defgroup kalman_functions Kalman module functions
+    Standalone functions for the kalman module.
+ */
+///@{
+namespace Qore::Kalman;
+
+//! Returns the kalman module version string.
+/** @return the version string (e.g., @c "1.0.0")
+
+    @par Example:
+    @code{.py}
+string v = kalman_version();
+    @endcode
+*/
+string kalman_version() [flags=CONSTANT] {
+    return new QoreStringNode(PACKAGE_VERSION);
+}
+
+//! Returns detailed kalman module version information.
+/** @return a @ref KalmanVersionInfo hash with parsed version components.
+
+    @par Example:
+    @code{.py}
+hash<KalmanVersionInfo> info = get_kalman_info();
+printf("kalman %d.%d.%d\n", info.major, info.minor, info.patch);
+    @endcode
+*/
+hash<KalmanVersionInfo> get_kalman_info() [flags=RET_VALUE_ONLY] {
+    ReferenceHolder<QoreHashNode> h(new QoreHashNode(hashdeclKalmanVersionInfo, xsink), xsink);
+    h->setKeyValue("version", new QoreStringNode(PACKAGE_VERSION), xsink);
+
+    const char* v = PACKAGE_VERSION;
+    int major = atoi(v);
+    int minor = 0;
+    int patch = 0;
+    const char* p = strchr(v, '.');
+    if (p) {
+        minor = atoi(p + 1);
+        p = strchr(p + 1, '.');
+        if (p) {
+            patch = atoi(p + 1);
+        }
+    }
+    h->setKeyValue("major", major, xsink);
+    h->setKeyValue("minor", minor, xsink);
+    h->setKeyValue("patch", patch, xsink);
+    return h.release();
+}
+///@}

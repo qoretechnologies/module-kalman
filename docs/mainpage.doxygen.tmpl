@@ -1,0 +1,131 @@
+/** @mainpage %Qore kalman Module
+
+    @tableofcontents
+
+    @section kalmanintro kalman Module Introduction
+
+    The \c kalman module provides Kalman filter bindings on top of
+    [Eigen](https://eigen.tuxfamily.org) for the
+    <a href="../../lang/html/index.html">Qore programming language</a>.
+
+    Kalman filters are the standard approach for denoising, tracking,
+    sensor-fusing, and smoothing sequential noisy observations. Canonical
+    applications:
+
+    - **Navigation / tracking** — GPS/INS fusion, vehicle / pedestrian
+      tracking, where noisy position measurements are smoothed against
+      a motion model.
+    - **Control systems** — state estimation for closed-loop controllers
+      that must react to filtered state, not raw sensor noise.
+    - **Industrial IoT** — sensor-signal denoising for predictive
+      maintenance, anomaly detection.
+    - **Finance** — smoothing noisy price series into trend estimates,
+      volatility tracking.
+
+    @section kalmanapi kalman Module API
+
+    Main classes:
+    - @ref Qore::Kalman::Matrix "Matrix" — dense matrix primitive
+      (Eigen-backed); arithmetic, transpose, inverse, cholesky,
+      determinant. Immutable — every operation returns a new matrix.
+    - @ref Qore::Kalman::LinearFilter "LinearFilter" — standard Kalman
+      filter (LKF) for linear Gaussian systems. Set F / H / Q / R /
+      initial state, then call \c predict() / \c update() per step.
+    - @ref Qore::Kalman::ExtendedFilter "ExtendedFilter" — extended
+      Kalman filter (EKF) for non-linear dynamics or observations. The
+      non-linear state-transition and measurement functions are supplied
+      as Qore callbacks; the callback also returns the Jacobian.
+
+    Standalone functions:
+    - @ref Qore::Kalman::kalman_version() "kalman_version()" — module
+      version string.
+    - @ref Qore::Kalman::get_kalman_info() "get_kalman_info()" —
+      structured version info.
+
+    @section kalmanthread Thread safety
+
+    @ref Qore::Kalman::Matrix "Matrix" is immutable after construction
+    — every method returns a new matrix rather than mutating the
+    receiver. Sharing a @c Matrix across threads is safe.
+
+    Filter objects (@ref Qore::Kalman::LinearFilter "LinearFilter",
+    @ref Qore::Kalman::ExtendedFilter "ExtendedFilter") hold
+    mutable state (the current state vector and covariance matrix)
+    and must **not** be shared across threads without external
+    locking. Typical usage is one filter per tracked object (per
+    vehicle, per sensor, per stream) — no concurrency issue then.
+
+    @section kalmanusage Basic usage
+
+    2D constant-velocity tracking: state is \c [x, y, vx, vy], we
+    observe \c [x, y] only.
+
+    @code{.py}
+%requires kalman
+
+Qore::Kalman::LinearFilter kf(<LinearFilterOptions>{
+    "state_size": 4,
+    "measurement_size": 2,
+});
+
+# Transition: x_{k+1} = x_k + vx * dt, y_{k+1} = y_k + vy * dt, velocities constant.
+float dt = 0.1;
+Qore::Kalman::Matrix F = Qore::Kalman::Matrix::fromRows((
+    (1.0, 0.0, dt,  0.0),
+    (0.0, 1.0, 0.0, dt),
+    (0.0, 0.0, 1.0, 0.0),
+    (0.0, 0.0, 0.0, 1.0),
+));
+
+# Observation: we see position directly, not velocity.
+Qore::Kalman::Matrix H = Qore::Kalman::Matrix::fromRows((
+    (1.0, 0.0, 0.0, 0.0),
+    (0.0, 1.0, 0.0, 0.0),
+));
+
+# Process noise: small drift on velocity channel (1 m/s² accel uncertainty).
+float sigma_a = 1.0;
+Qore::Kalman::Matrix Q = Qore::Kalman::Matrix::fromRows((
+    (dt * dt * dt * dt / 4.0, 0.0, dt * dt * dt / 2.0, 0.0),
+    (0.0, dt * dt * dt * dt / 4.0, 0.0, dt * dt * dt / 2.0),
+    (dt * dt * dt / 2.0, 0.0, dt * dt, 0.0),
+    (0.0, dt * dt * dt / 2.0, 0.0, dt * dt),
+)).mul(sigma_a * sigma_a);
+
+# Measurement noise: 5 m GPS CEP-ish.
+Qore::Kalman::Matrix R = Qore::Kalman::Matrix::fromRows((
+    (25.0, 0.0),
+    (0.0, 25.0),
+));
+
+kf.setF(F);
+kf.setH(H);
+kf.setQ(Q);
+kf.setR(R);
+kf.setState(
+    Qore::Kalman::Matrix::fromColumn((0.0, 0.0, 0.0, 0.0)),
+    Qore::Kalman::Matrix::identity(4).mul(100.0),
+);
+
+# Step loop: predict + update per observation.
+list<auto> observations = (...);  # list of (x_obs, y_obs) pairs
+foreach list<float> obs in (observations) {
+    kf.predict();
+    kf.update(Qore::Kalman::Matrix::fromColumn(obs));
+}
+hash<KalmanFilterState> final = kf.state();
+# final.state is the 4x1 smoothed state, final.covariance is the 4x4 P matrix
+    @endcode
+
+    @section kalmanrelease kalman Module Release History
+
+    @subsection kalman_1_0 kalman Module Version 1.0
+    - initial public release
+    - @ref Qore::Kalman::Matrix "Matrix" primitive with arithmetic,
+      transpose, inverse, cholesky, determinant
+    - @ref Qore::Kalman::LinearFilter "LinearFilter" (standard KF)
+    - @ref Qore::Kalman::ExtendedFilter "ExtendedFilter" (EKF via
+      Qore Jacobian callbacks)
+    - Joseph-form covariance update for numerical stability
+    - module version helpers
+*/

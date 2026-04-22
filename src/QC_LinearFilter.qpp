@@ -1,0 +1,372 @@
+/* -*- mode: c++; indent-tabs-mode: nil -*- */
+/*
+    QC_LinearFilter.qpp
+
+    Qore Programming Language
+
+    Copyright (C) 2026 Qore Technologies, s.r.o.
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+*/
+
+#include "QC_LinearFilter.h"
+#include "QC_Matrix.h"
+
+// ---- C++ implementation ----
+
+QoreLinearFilter::QoreLinearFilter(int state_size, int measurement_size, int control_size)
+    : n(state_size), mdim(measurement_size), cdim(control_size),
+      x(Eigen::MatrixXd::Zero(state_size, 1)),
+      P(Eigen::MatrixXd::Identity(state_size, state_size)),
+      haveF(false), haveH(false), haveQ(false), haveR(false),
+      haveB(control_size == 0),  // no B needed if no control input
+      haveState(false),
+      predict_count(0), update_count(0) {}
+
+static bool checkShape(const Eigen::MatrixXd& m, Eigen::Index want_rows,
+        Eigen::Index want_cols, const char* name, ExceptionSink* xsink) {
+    if (m.rows() != want_rows || m.cols() != want_cols) {
+        xsink->raiseException("KALMAN-DIMENSION-ERROR",
+            "%s must be %lldx%lld; got %lldx%lld",
+            name, (long long)want_rows, (long long)want_cols,
+            (long long)m.rows(), (long long)m.cols());
+        return false;
+    }
+    return true;
+}
+
+void QoreLinearFilter::setF(const Eigen::MatrixXd& F_, ExceptionSink* xsink) {
+    if (!checkShape(F_, n, n, "F (state transition)", xsink)) return;
+    F = F_;
+    haveF = true;
+}
+
+void QoreLinearFilter::setH(const Eigen::MatrixXd& H_, ExceptionSink* xsink) {
+    if (!checkShape(H_, mdim, n, "H (observation)", xsink)) return;
+    H = H_;
+    haveH = true;
+}
+
+void QoreLinearFilter::setQ(const Eigen::MatrixXd& Q_, ExceptionSink* xsink) {
+    if (!checkShape(Q_, n, n, "Q (process noise)", xsink)) return;
+    Q = Q_;
+    haveQ = true;
+}
+
+void QoreLinearFilter::setR(const Eigen::MatrixXd& R_, ExceptionSink* xsink) {
+    if (!checkShape(R_, mdim, mdim, "R (measurement noise)", xsink)) return;
+    R = R_;
+    haveR = true;
+}
+
+void QoreLinearFilter::setB(const Eigen::MatrixXd& B_, ExceptionSink* xsink) {
+    if (cdim == 0) {
+        xsink->raiseException("KALMAN-STATE-ERROR",
+            "filter was constructed with control_size=0; cannot set B");
+        return;
+    }
+    if (!checkShape(B_, n, cdim, "B (control input)", xsink)) return;
+    B = B_;
+    haveB = true;
+}
+
+void QoreLinearFilter::setState(const Eigen::MatrixXd& x_,
+        const Eigen::MatrixXd& P_, ExceptionSink* xsink) {
+    if (!checkShape(x_, n, 1, "state vector", xsink)) return;
+    if (!checkShape(P_, n, n, "covariance matrix", xsink)) return;
+    x = x_;
+    P = P_;
+    haveState = true;
+}
+
+void QoreLinearFilter::predict(ExceptionSink* xsink) {
+    if (!haveF || !haveQ) {
+        xsink->raiseException("KALMAN-STATE-ERROR",
+            "predict() requires F (setF) and Q (setQ) to be set first");
+        return;
+    }
+    if (!haveState) {
+        xsink->raiseException("KALMAN-STATE-ERROR",
+            "predict() requires the initial state to be set via setState()");
+        return;
+    }
+    // x_{k|k-1} = F · x_{k-1}
+    x = F * x;
+    // P_{k|k-1} = F · P_{k-1} · Fᵀ + Q
+    P = F * P * F.transpose() + Q;
+    ++predict_count;
+}
+
+void QoreLinearFilter::predictWithControl(const Eigen::MatrixXd& u, ExceptionSink* xsink) {
+    if (cdim == 0) {
+        xsink->raiseException("KALMAN-STATE-ERROR",
+            "filter has no control input (constructed with control_size=0); "
+            "use predict() without a control vector");
+        return;
+    }
+    if (!haveF || !haveQ || !haveB) {
+        xsink->raiseException("KALMAN-STATE-ERROR",
+            "predict(u) requires F (setF), Q (setQ), and B (setB) to be set first");
+        return;
+    }
+    if (!haveState) {
+        xsink->raiseException("KALMAN-STATE-ERROR",
+            "predict(u) requires the initial state to be set via setState()");
+        return;
+    }
+    if (!checkShape(u, cdim, 1, "control input u", xsink)) return;
+    x = F * x + B * u;
+    P = F * P * F.transpose() + Q;
+    ++predict_count;
+}
+
+void QoreLinearFilter::update(const Eigen::MatrixXd& z, ExceptionSink* xsink) {
+    if (!haveH || !haveR) {
+        xsink->raiseException("KALMAN-STATE-ERROR",
+            "update() requires H (setH) and R (setR) to be set first");
+        return;
+    }
+    if (!haveState) {
+        xsink->raiseException("KALMAN-STATE-ERROR",
+            "update() requires the initial state to be set via setState()");
+        return;
+    }
+    if (!checkShape(z, mdim, 1, "observation z", xsink)) return;
+    // Innovation: y = z - H · x
+    Eigen::MatrixXd y = z - H * x;
+    // Innovation covariance: S = H · P · Hᵀ + R
+    Eigen::MatrixXd S = H * P * H.transpose() + R;
+    // Kalman gain: K = P · Hᵀ · S⁻¹
+    // Use a robust solver — FullPivLU detects singularity cleanly.
+    Eigen::FullPivLU<Eigen::MatrixXd> lu(S);
+    if (!lu.isInvertible()) {
+        xsink->raiseException("KALMAN-SINGULAR",
+            "innovation covariance S = H·P·Hᵀ + R is singular; "
+            "check that R is positive-definite and H is well-conditioned");
+        return;
+    }
+    Eigen::MatrixXd K = P * H.transpose() * lu.inverse();
+    // State update: x = x + K · y
+    x = x + K * y;
+    // Joseph form covariance update: numerically more stable than
+    // P = (I - K·H) · P because it preserves positive-definiteness
+    // by construction when R is positive-definite.
+    Eigen::MatrixXd I = Eigen::MatrixXd::Identity(n, n);
+    Eigen::MatrixXd IKH = I - K * H;
+    P = IKH * P * IKH.transpose() + K * R * K.transpose();
+    ++update_count;
+}
+
+// Helper: wrap an Eigen matrix in a Qore Matrix object.
+static QoreObject* wrapEigen(const Eigen::MatrixXd& e, ExceptionSink* xsink) {
+    QoreObject* obj = new QoreObject(QC_MATRIX, getProgram());
+    obj->setPrivate(CID_MATRIX, new QoreMatrix(e));
+    return obj;
+}
+
+// ---- Qore class definition ----
+
+//! Standard linear Kalman filter (LKF).
+/** Tracks a state vector @c x (of size @c state_size) observed through a
+    linear measurement model. Dimensions are fixed at construction;
+    state-transition @c F, observation @c H, process-noise @c Q,
+    measurement-noise @c R, and optional control-input @c B matrices
+    are configured via setters before the first @ref predict() call.
+
+    Update uses the Joseph form covariance update
+    (@c P = (I - K·H)·P·(I - K·H)ᵀ + K·R·Kᵀ) to preserve positive-
+    definiteness of the covariance matrix under accumulated floating-
+    point error — more robust than the simpler @c P = (I - K·H)·P form.
+
+    Not safe to share a single filter across threads. Each tracked
+    object gets its own filter; the filter lives on the owning thread.
+
+    @par Example: 2D constant-velocity tracking
+    @code{.py}
+Qore::Kalman::LinearFilter kf(<LinearFilterOptions>{
+    "state_size": 4,
+    "measurement_size": 2,
+});
+kf.setF(F_matrix);  # 4x4
+kf.setH(H_matrix);  # 2x4
+kf.setQ(Q_matrix);  # 4x4
+kf.setR(R_matrix);  # 2x2
+kf.setState(init_state, init_covariance);
+foreach list<float> obs in (observations) {
+    kf.predict();
+    kf.update(Qore::Kalman::Matrix::fromColumn(obs));
+}
+hash<KalmanFilterState> s = kf.state();
+    @endcode
+*/
+qclass LinearFilter [arg=QoreLinearFilter* kf; ns=Qore::Kalman];
+
+//! Creates a new linear Kalman filter with the given dimensions.
+/** @param options hash with integer keys:
+        - \c state_size (required): size of the state vector.
+        - \c measurement_size (required): size of the measurement vector.
+        - \c control_size (optional, default 0): size of the control input
+          vector. Zero disables control input — @ref predict() without a
+          control argument is required.
+
+    @throw KALMAN-DIMENSION-ERROR state_size or measurement_size is
+        non-positive, or control_size is negative.
+*/
+LinearFilter::constructor(hash<LinearFilterOptions> options) {
+    int state_size = (int)options->getKeyValue("state_size").getAsBigInt();
+    int measurement_size = (int)options->getKeyValue("measurement_size").getAsBigInt();
+    QoreValue cv = options->getKeyValue("control_size");
+    int control_size = cv.isNullOrNothing() ? 0 : (int)cv.getAsBigInt();
+    if (state_size <= 0) {
+        xsink->raiseException("KALMAN-DIMENSION-ERROR",
+            "state_size must be positive; got %d", state_size);
+        return;
+    }
+    if (measurement_size <= 0) {
+        xsink->raiseException("KALMAN-DIMENSION-ERROR",
+            "measurement_size must be positive; got %d", measurement_size);
+        return;
+    }
+    if (control_size < 0) {
+        xsink->raiseException("KALMAN-DIMENSION-ERROR",
+            "control_size must be non-negative; got %d", control_size);
+        return;
+    }
+    self->setPrivate(CID_LINEARFILTER,
+        new QoreLinearFilter(state_size, measurement_size, control_size));
+}
+
+//! Sets the state-transition matrix F.
+/** @param F @ref Matrix of shape state_size × state_size.
+    @throw KALMAN-DIMENSION-ERROR F has the wrong shape.
+*/
+nothing LinearFilter::setF(Matrix[QoreMatrix] F) {
+    kf->setF(F->get(), xsink);
+}
+
+//! Sets the observation matrix H.
+/** @param H @ref Matrix of shape measurement_size × state_size.
+    @throw KALMAN-DIMENSION-ERROR H has the wrong shape.
+*/
+nothing LinearFilter::setH(Matrix[QoreMatrix] H) {
+    kf->setH(H->get(), xsink);
+}
+
+//! Sets the process-noise covariance matrix Q.
+/** @param Q @ref Matrix of shape state_size × state_size.
+    @throw KALMAN-DIMENSION-ERROR Q has the wrong shape.
+*/
+nothing LinearFilter::setQ(Matrix[QoreMatrix] Q) {
+    kf->setQ(Q->get(), xsink);
+}
+
+//! Sets the measurement-noise covariance matrix R.
+/** @param R @ref Matrix of shape measurement_size × measurement_size.
+    @throw KALMAN-DIMENSION-ERROR R has the wrong shape.
+*/
+nothing LinearFilter::setR(Matrix[QoreMatrix] R) {
+    kf->setR(R->get(), xsink);
+}
+
+//! Sets the control-input matrix B (only if the filter was constructed with \c control_size > 0).
+/** @param B @ref Matrix of shape state_size × control_size.
+    @throw KALMAN-STATE-ERROR filter has no control input.
+    @throw KALMAN-DIMENSION-ERROR B has the wrong shape.
+*/
+nothing LinearFilter::setB(Matrix[QoreMatrix] B) {
+    kf->setB(B->get(), xsink);
+}
+
+//! Sets the initial state vector and covariance.
+/** @param x_init state vector, @ref Matrix of shape state_size × 1.
+    @param P_init covariance, @ref Matrix of shape state_size × state_size.
+    @throw KALMAN-DIMENSION-ERROR shapes don't match filter dimensions.
+*/
+nothing LinearFilter::setState(Matrix[QoreMatrix] x_init, Matrix[QoreMatrix] P_init) {
+    kf->setState(x_init->get(), P_init->get(), xsink);
+}
+
+//! Runs the predict step: \c x = F·x, \c P = F·P·Fᵀ + Q.
+/** For filters constructed with @c control_size == 0. Use @ref predict(Matrix)
+    for filters with a control input.
+
+    @throw KALMAN-STATE-ERROR F / Q / initial state not set yet.
+*/
+nothing LinearFilter::predict() {
+    kf->predict(xsink);
+}
+
+//! Runs the predict step with a control input: \c x = F·x + B·u, \c P = F·P·Fᵀ + Q.
+/** @param u control input vector, @ref Matrix of shape control_size × 1.
+
+    @throw KALMAN-STATE-ERROR filter has no control input, or required
+        matrices not set.
+    @throw KALMAN-DIMENSION-ERROR u has the wrong shape.
+*/
+nothing LinearFilter::predict(Matrix[QoreMatrix] u) {
+    kf->predictWithControl(u->get(), xsink);
+}
+
+//! Runs the update step for one observation.
+/** Applies the Kalman gain and the Joseph-form covariance update. After
+    this call, @ref state() returns the posterior (@c x_{k|k}, @c P_{k|k}).
+
+    @param z observation vector, @ref Matrix of shape measurement_size × 1.
+
+    @throw KALMAN-STATE-ERROR H / R / initial state not set yet.
+    @throw KALMAN-DIMENSION-ERROR z has the wrong shape.
+    @throw KALMAN-SINGULAR innovation covariance is singular.
+*/
+nothing LinearFilter::update(Matrix[QoreMatrix] z) {
+    kf->update(z->get(), xsink);
+}
+
+//! Returns the current filter state + covariance + step counters.
+/** @return a @ref KalmanFilterState hash with the current (x, P) and
+    the predict / update call counters.
+*/
+hash<KalmanFilterState> LinearFilter::state() [flags=RET_VALUE_ONLY] {
+    ReferenceHolder<QoreHashNode> h(new QoreHashNode(hashdeclKalmanFilterState, xsink), xsink);
+    h->setKeyValue("state", wrapEigen(kf->getState(), xsink), xsink);
+    h->setKeyValue("covariance", wrapEigen(kf->getCovariance(), xsink), xsink);
+    h->setKeyValue("update_count", kf->getUpdateCount(), xsink);
+    h->setKeyValue("predict_count", kf->getPredictCount(), xsink);
+    return h.release();
+}
+
+//! Returns the filter's configured state-vector size.
+/** Fixed at construction; cannot change.
+*/
+int LinearFilter::stateSize() [flags=CONSTANT] {
+    return kf->stateSize();
+}
+
+//! Returns the filter's configured measurement-vector size.
+/** Fixed at construction; cannot change.
+*/
+int LinearFilter::measurementSize() [flags=CONSTANT] {
+    return kf->measurementSize();
+}
+
+//! Returns the filter's configured control-input size (0 if no control input).
+/** Fixed at construction; cannot change.
+*/
+int LinearFilter::controlSize() [flags=CONSTANT] {
+    return kf->controlSize();
+}

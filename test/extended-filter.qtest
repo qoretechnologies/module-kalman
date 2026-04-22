@@ -1,0 +1,259 @@
+#!/usr/bin/env qore
+# -*- mode: qore; indent-tabs-mode: nil -*-
+
+%modern
+%enable-all-warnings
+%requires kalman
+%requires QUnit
+
+%exec-class ExtendedFilterTest
+
+public class ExtendedFilterTest inherits QUnit::Test {
+    constructor() : Test("ExtendedFilterTest", "1.0") {
+        addTestCase("construction + accessors", \constructionTests());
+        addTestCase("identity jacobian EKF matches LKF on linear system",
+            \ekfMatchesLkfOnLinearSystemTests());
+        addTestCase("non-linear measurement model: bearings-only tracking",
+            \bearingsOnlyIntegrationTests());
+        addTestCase("negative: missing callbacks / setters",
+            \negativeMissingTests());
+        addTestCase("negative: callback returns wrong-shape result",
+            \negativeCallbackShapeTests());
+        addTestCase("negative: dimension errors on construct / setters",
+            \negativeDimensionTests());
+        addTestCase("corner: callback that throws propagates",
+            \callbackThrowsTests());
+        set_return_value(main());
+    }
+
+    constructionTests() {
+        Qore::Kalman::ExtendedFilter ekf(4, 2);
+        assertEq(4, ekf.stateSize());
+        assertEq(2, ekf.measurementSize());
+        hash<KalmanFilterState> s = ekf.state();
+        assertEq(0, s.predict_count);
+        assertEq(0, s.update_count);
+    }
+
+    ekfMatchesLkfOnLinearSystemTests() {
+        # When the state transition and observation functions are
+        # linear (and the Jacobian is constant = the linear matrix),
+        # EKF must produce identical results to LKF.
+        float dt = 0.1;
+        Qore::Kalman::Matrix F = Qore::Kalman::Matrix::fromRows((
+            (1.0, 0.0, dt,  0.0),
+            (0.0, 1.0, 0.0, dt),
+            (0.0, 0.0, 1.0, 0.0),
+            (0.0, 0.0, 0.0, 1.0),
+        ));
+        Qore::Kalman::Matrix H = Qore::Kalman::Matrix::fromRows((
+            (1.0, 0.0, 0.0, 0.0),
+            (0.0, 1.0, 0.0, 0.0),
+        ));
+        Qore::Kalman::Matrix Q = Qore::Kalman::Matrix::identity(4).mul(0.01);
+        Qore::Kalman::Matrix R = Qore::Kalman::Matrix::identity(2).mul(4.0);
+
+        # Set up LKF.
+        Qore::Kalman::LinearFilter lkf(<LinearFilterOptions>{
+            "state_size": 4, "measurement_size": 2,
+        });
+        lkf.setF(F);
+        lkf.setH(H);
+        lkf.setQ(Q);
+        lkf.setR(R);
+        lkf.setState(
+            Qore::Kalman::Matrix::fromColumn((0.0, 0.0, 0.0, 0.0)),
+            Qore::Kalman::Matrix::identity(4).mul(10.0));
+
+        # Set up EKF with callbacks that reproduce the linear model.
+        Qore::Kalman::ExtendedFilter ekf(4, 2);
+        ekf.setQ(Q);
+        ekf.setR(R);
+        ekf.setState(
+            Qore::Kalman::Matrix::fromColumn((0.0, 0.0, 0.0, 0.0)),
+            Qore::Kalman::Matrix::identity(4).mul(10.0));
+        ekf.setPredictFunction(hash<auto> sub (Qore::Kalman::Matrix x_cur) {
+            return {
+                "predicted": F.mul(x_cur),
+                "jacobian": F,
+            };
+        });
+        ekf.setMeasurementFunction(hash<auto> sub (Qore::Kalman::Matrix x_cur) {
+            return {
+                "predicted": H.mul(x_cur),
+                "jacobian": H,
+            };
+        });
+
+        # Run both through the same sequence of observations.
+        list<list<float>> obs = (
+            (1.0, 1.0), (2.1, 1.9), (3.0, 3.1), (4.05, 3.95), (5.1, 4.9),
+        );
+        foreach list<float> o in (obs) {
+            Qore::Kalman::Matrix z = Qore::Kalman::Matrix::fromColumn(o);
+            lkf.predict();
+            lkf.update(z);
+            ekf.predict();
+            ekf.update(z);
+        }
+
+        hash<KalmanFilterState> lkf_s = lkf.state();
+        hash<KalmanFilterState> ekf_s = ekf.state();
+        # State vectors should match within tight tolerance.
+        for (int i = 0; i < 4; ++i) {
+            assertTrue(abs(lkf_s.state.at(i, 0) - ekf_s.state.at(i, 0)) < 1e-9,
+                sprintf("state[%d] mismatch: LKF=%.9f EKF=%.9f",
+                    i, lkf_s.state.at(i, 0), ekf_s.state.at(i, 0)));
+        }
+        # Covariance too.
+        for (int i = 0; i < 4; ++i) {
+            assertTrue(abs(lkf_s.covariance.at(i, i) - ekf_s.covariance.at(i, i)) < 1e-9,
+                sprintf("P[%d,%d] mismatch", i, i));
+        }
+    }
+
+    bearingsOnlyIntegrationTests() {
+        # 2D position tracking from bearings alone. Truly non-linear.
+        # State: [x, y, vx, vy]. Dynamics linear (CV model).
+        # Measurement: atan2(y, x) — non-linear.
+        float dt = 0.1;
+        Qore::Kalman::Matrix F = Qore::Kalman::Matrix::fromRows((
+            (1.0, 0.0, dt,  0.0),
+            (0.0, 1.0, 0.0, dt),
+            (0.0, 0.0, 1.0, 0.0),
+            (0.0, 0.0, 0.0, 1.0),
+        ));
+
+        Qore::Kalman::ExtendedFilter ekf(4, 1);
+        ekf.setQ(Qore::Kalman::Matrix::identity(4).mul(0.01));
+        ekf.setR(Qore::Kalman::Matrix::identity(1).mul(0.0025));  # σ=0.05 rad bearing
+        # Start at (5, 5) moving (1, 0.5) with wide uncertainty.
+        ekf.setState(
+            Qore::Kalman::Matrix::fromColumn((5.0, 5.0, 1.0, 0.5)),
+            Qore::Kalman::Matrix::identity(4).mul(1.0));
+        ekf.setPredictFunction(hash<auto> sub (Qore::Kalman::Matrix x_cur) {
+            return {"predicted": F.mul(x_cur), "jacobian": F};
+        });
+        ekf.setMeasurementFunction(hash<auto> sub (Qore::Kalman::Matrix x_cur) {
+            float px = x_cur.at(0, 0);
+            float py = x_cur.at(1, 0);
+            float bearing = atan2(py, px);
+            float r2 = px * px + py * py;
+            Qore::Kalman::Matrix H = Qore::Kalman::Matrix::fromRows((
+                (-py / r2, px / r2, 0.0, 0.0),
+            ));
+            return {
+                "predicted": Qore::Kalman::Matrix::fromColumn((bearing,)),
+                "jacobian": H,
+            };
+        });
+
+        # Simulate truth: start at (5, 5), velocity (1, 0.5), run 50 steps.
+        for (int i = 0; i < 50; ++i) {
+            float true_x = 5.0 + 1.0 * (i * dt);
+            float true_y = 5.0 + 0.5 * (i * dt);
+            float true_bearing = atan2(true_y, true_x);
+            # Add a tiny deterministic noise pattern.
+            float noise = 0.02 * sin(i * 0.7);
+            float obs_bearing = true_bearing + noise;
+
+            ekf.predict();
+            ekf.update(Qore::Kalman::Matrix::fromColumn((obs_bearing,)));
+        }
+
+        hash<KalmanFilterState> result = ekf.state();
+        # EKF should stay in a reasonable neighbourhood of the truth.
+        # Bearings-only with zero range info is fundamentally under-
+        # constrained on range, so we only assert the filter didn't
+        # diverge.
+        assertTrue(abs(result.state.at(0, 0)) < 30.0,
+            sprintf("x stayed bounded (got %.2f)", result.state.at(0, 0)));
+        assertTrue(abs(result.state.at(1, 0)) < 30.0,
+            sprintf("y stayed bounded (got %.2f)", result.state.at(1, 0)));
+        # Update counters correct.
+        assertEq(50, result.predict_count);
+        assertEq(50, result.update_count);
+    }
+
+    negativeMissingTests() {
+        Qore::Kalman::ExtendedFilter ekf(2, 2);
+        # predict without Q / callback / state
+        assertThrows("KALMAN-STATE-ERROR", sub () { ekf.predict(); });
+        ekf.setQ(Qore::Kalman::Matrix::identity(2));
+        assertThrows("KALMAN-STATE-ERROR", sub () { ekf.predict(); });
+        ekf.setState(
+            Qore::Kalman::Matrix::fromColumn((0.0, 0.0)),
+            Qore::Kalman::Matrix::identity(2));
+        # Still no predict callback set.
+        assertThrows("KALMAN-STATE-ERROR", sub () { ekf.predict(); });
+
+        # update without R / callback
+        ekf.setR(Qore::Kalman::Matrix::identity(2));
+        assertThrows("KALMAN-STATE-ERROR", sub () {
+            ekf.update(Qore::Kalman::Matrix::fromColumn((1.0, 1.0)));
+        });
+    }
+
+    negativeCallbackShapeTests() {
+        Qore::Kalman::ExtendedFilter ekf(2, 2);
+        ekf.setQ(Qore::Kalman::Matrix::identity(2));
+        ekf.setR(Qore::Kalman::Matrix::identity(2));
+        ekf.setState(
+            Qore::Kalman::Matrix::fromColumn((0.0, 0.0)),
+            Qore::Kalman::Matrix::identity(2));
+        # Callback returns hash with wrong-shape predicted.
+        ekf.setPredictFunction(hash<auto> sub (Qore::Kalman::Matrix x_cur) {
+            return {
+                "predicted": Qore::Kalman::Matrix::fromColumn((0.0, 0.0, 0.0)),  # 3x1, should be 2x1
+                "jacobian": Qore::Kalman::Matrix::identity(2),
+            };
+        });
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () { ekf.predict(); });
+
+        # Callback returns hash with wrong jacobian shape.
+        ekf.setPredictFunction(hash<auto> sub (Qore::Kalman::Matrix x_cur) {
+            return {
+                "predicted": Qore::Kalman::Matrix::fromColumn((0.0, 0.0)),
+                "jacobian": Qore::Kalman::Matrix::identity(3),  # 3x3, should be 2x2
+            };
+        });
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () { ekf.predict(); });
+
+        # Callback returns a non-hash.
+        ekf.setPredictFunction(auto sub (Qore::Kalman::Matrix x_cur) {
+            return "not a hash";
+        });
+        assertThrows("KALMAN-CALLBACK-ERROR", sub () { ekf.predict(); });
+    }
+
+    negativeDimensionTests() {
+        # Non-positive dimensions.
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () {
+            new Qore::Kalman::ExtendedFilter(0, 2);
+        });
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () {
+            new Qore::Kalman::ExtendedFilter(2, 0);
+        });
+        # Wrong-shape Q / R.
+        Qore::Kalman::ExtendedFilter ekf(2, 3);
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () {
+            ekf.setQ(Qore::Kalman::Matrix::identity(3));
+        });
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () {
+            ekf.setR(Qore::Kalman::Matrix::identity(2));
+        });
+    }
+
+    callbackThrowsTests() {
+        Qore::Kalman::ExtendedFilter ekf(2, 2);
+        ekf.setQ(Qore::Kalman::Matrix::identity(2));
+        ekf.setState(
+            Qore::Kalman::Matrix::fromColumn((0.0, 0.0)),
+            Qore::Kalman::Matrix::identity(2));
+        ekf.setPredictFunction(hash<auto> sub (Qore::Kalman::Matrix x_cur) {
+            throw "USER-EXCEPTION", "something went wrong inside the callback";
+        });
+        # The user's exception must propagate out of predict().
+        assertThrows("USER-EXCEPTION", sub () { ekf.predict(); });
+    }
+}

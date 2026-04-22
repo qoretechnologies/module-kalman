@@ -1,0 +1,261 @@
+#!/usr/bin/env qore
+# -*- mode: qore; indent-tabs-mode: nil -*-
+
+%modern
+%enable-all-warnings
+%requires kalman
+%requires QUnit
+
+%exec-class MatrixTest
+
+public class MatrixTest inherits QUnit::Test {
+    constructor() : Test("MatrixTest", "1.0") {
+        addTestCase("construction from rows / column / zeros / identity",
+            \constructionTests());
+        addTestCase("shape + element access",
+            \shapeAndAccessTests());
+        addTestCase("add / sub",
+            \addSubTests());
+        addTestCase("matrix * matrix multiplication",
+            \mulMatrixTests());
+        addTestCase("matrix * scalar multiplication",
+            \mulScalarTests());
+        addTestCase("transpose",
+            \transposeTests());
+        addTestCase("inverse + determinant + trace",
+            \inverseDetTraceTests());
+        addTestCase("cholesky decomposition",
+            \choleskyTests());
+        addTestCase("negative: dimension mismatches",
+            \negativeDimensionTests());
+        addTestCase("negative: singular / non-square / non-PD",
+            \negativeSingularTests());
+        addTestCase("corner: 1x1 and empty matrices",
+            \cornerTinyTests());
+        set_return_value(main());
+    }
+
+    constructionTests() {
+        Qore::Kalman::Matrix m = Qore::Kalman::Matrix::fromRows((
+            (1.0, 2.0, 3.0),
+            (4.0, 5.0, 6.0),
+        ));
+        assertEq(2, m.numRows());
+        assertEq(3, m.numCols());
+        assertEq((2, 3), m.shape());
+
+        Qore::Kalman::Matrix col = Qore::Kalman::Matrix::fromColumn((1.0, 2.0, 3.0));
+        assertEq(3, col.numRows());
+        assertEq(1, col.numCols());
+
+        Qore::Kalman::Matrix z = Qore::Kalman::Matrix::zeros(2, 4);
+        assertEq(0.0, z.at(0, 0));
+        assertEq(0.0, z.at(1, 3));
+
+        Qore::Kalman::Matrix i3 = Qore::Kalman::Matrix::identity(3);
+        assertEq(1.0, i3.at(0, 0));
+        assertEq(1.0, i3.at(1, 1));
+        assertEq(1.0, i3.at(2, 2));
+        assertEq(0.0, i3.at(0, 1));
+        assertEq(0.0, i3.at(1, 2));
+    }
+
+    shapeAndAccessTests() {
+        Qore::Kalman::Matrix m = Qore::Kalman::Matrix::fromRows((
+            (1.0, 2.0),
+            (3.0, 4.0),
+        ));
+        assertEq(1.0, m.at(0, 0));
+        assertEq(2.0, m.at(0, 1));
+        assertEq(3.0, m.at(1, 0));
+        assertEq(4.0, m.at(1, 1));
+
+        list<list<float>> rows = m.toRows();
+        assertEq(2, rows.size());
+        assertEq((1.0, 2.0), rows[0]);
+        assertEq((3.0, 4.0), rows[1]);
+    }
+
+    addSubTests() {
+        Qore::Kalman::Matrix a = Qore::Kalman::Matrix::fromRows(((1.0, 2.0), (3.0, 4.0)));
+        Qore::Kalman::Matrix b = Qore::Kalman::Matrix::fromRows(((10.0, 20.0), (30.0, 40.0)));
+        Qore::Kalman::Matrix sum = a.add(b);
+        assertEq(11.0, sum.at(0, 0));
+        assertEq(22.0, sum.at(0, 1));
+        assertEq(33.0, sum.at(1, 0));
+        assertEq(44.0, sum.at(1, 1));
+
+        Qore::Kalman::Matrix diff = b.sub(a);
+        assertEq(9.0, diff.at(0, 0));
+        assertEq(36.0, diff.at(1, 1));
+    }
+
+    mulMatrixTests() {
+        # 2x3 * 3x2 = 2x2
+        Qore::Kalman::Matrix a = Qore::Kalman::Matrix::fromRows((
+            (1.0, 2.0, 3.0),
+            (4.0, 5.0, 6.0),
+        ));
+        Qore::Kalman::Matrix b = Qore::Kalman::Matrix::fromRows((
+            (7.0, 8.0),
+            (9.0, 10.0),
+            (11.0, 12.0),
+        ));
+        Qore::Kalman::Matrix c = a.mul(b);
+        assertEq(2, c.numRows());
+        assertEq(2, c.numCols());
+        # (1*7 + 2*9 + 3*11, 1*8 + 2*10 + 3*12) = (58, 64)
+        assertEq(58.0, c.at(0, 0));
+        assertEq(64.0, c.at(0, 1));
+        # (4*7 + 5*9 + 6*11, 4*8 + 5*10 + 6*12) = (139, 154)
+        assertEq(139.0, c.at(1, 0));
+        assertEq(154.0, c.at(1, 1));
+
+        # I · A = A
+        Qore::Kalman::Matrix i = Qore::Kalman::Matrix::identity(2);
+        Qore::Kalman::Matrix square = Qore::Kalman::Matrix::fromRows(((1.0, 2.0), (3.0, 4.0)));
+        Qore::Kalman::Matrix prod = i.mul(square);
+        assertTrue(abs(prod.at(0, 0) - 1.0) < 1e-12);
+        assertTrue(abs(prod.at(1, 1) - 4.0) < 1e-12);
+    }
+
+    mulScalarTests() {
+        Qore::Kalman::Matrix m = Qore::Kalman::Matrix::fromRows(((1.0, 2.0), (3.0, 4.0)));
+        Qore::Kalman::Matrix doubled = m.mul(2.0);
+        assertEq(2.0, doubled.at(0, 0));
+        assertEq(8.0, doubled.at(1, 1));
+
+        Qore::Kalman::Matrix zeroed = m.mul(0.0);
+        assertEq(0.0, zeroed.at(0, 0));
+        assertEq(0.0, zeroed.at(1, 1));
+    }
+
+    transposeTests() {
+        Qore::Kalman::Matrix m = Qore::Kalman::Matrix::fromRows((
+            (1.0, 2.0, 3.0),
+            (4.0, 5.0, 6.0),
+        ));
+        Qore::Kalman::Matrix mt = m.transpose();
+        assertEq((3, 2), mt.shape());
+        assertEq(1.0, mt.at(0, 0));
+        assertEq(4.0, mt.at(0, 1));
+        assertEq(2.0, mt.at(1, 0));
+        assertEq(6.0, mt.at(2, 1));
+        # Double transpose returns original.
+        Qore::Kalman::Matrix mtt = mt.transpose();
+        assertEq(m.toRows(), mtt.toRows());
+    }
+
+    inverseDetTraceTests() {
+        # 2x2 inverse: [[1,2],[3,4]]^-1 = [[-2, 1], [1.5, -0.5]]
+        Qore::Kalman::Matrix m = Qore::Kalman::Matrix::fromRows(((1.0, 2.0), (3.0, 4.0)));
+        Qore::Kalman::Matrix inv = m.inverse();
+        assertTrue(abs(inv.at(0, 0) - (-2.0)) < 1e-12);
+        assertTrue(abs(inv.at(0, 1) - 1.0) < 1e-12);
+        assertTrue(abs(inv.at(1, 0) - 1.5) < 1e-12);
+        assertTrue(abs(inv.at(1, 1) - (-0.5)) < 1e-12);
+
+        # det([[1,2],[3,4]]) = 1*4 - 2*3 = -2
+        assertTrue(abs(m.determinant() - (-2.0)) < 1e-12);
+
+        # tr([[1,2],[3,4]]) = 5
+        assertTrue(abs(m.trace() - 5.0) < 1e-12);
+
+        # A · A^-1 = I
+        Qore::Kalman::Matrix id = m.mul(inv);
+        assertTrue(abs(id.at(0, 0) - 1.0) < 1e-10);
+        assertTrue(abs(id.at(1, 1) - 1.0) < 1e-10);
+        assertTrue(abs(id.at(0, 1)) < 1e-10);
+        assertTrue(abs(id.at(1, 0)) < 1e-10);
+    }
+
+    choleskyTests() {
+        # Build a symmetric positive-definite 2x2: A = [[4, 2], [2, 3]].
+        # Cholesky L should satisfy L · L^T = A.
+        Qore::Kalman::Matrix a = Qore::Kalman::Matrix::fromRows(((4.0, 2.0), (2.0, 3.0)));
+        Qore::Kalman::Matrix l = a.cholesky();
+        # L is lower-triangular: L[0,1] must be 0.
+        assertTrue(abs(l.at(0, 1)) < 1e-12);
+        # L · L^T = A
+        Qore::Kalman::Matrix lt = l.transpose();
+        Qore::Kalman::Matrix reconstructed = l.mul(lt);
+        assertTrue(abs(reconstructed.at(0, 0) - 4.0) < 1e-10);
+        assertTrue(abs(reconstructed.at(0, 1) - 2.0) < 1e-10);
+        assertTrue(abs(reconstructed.at(1, 0) - 2.0) < 1e-10);
+        assertTrue(abs(reconstructed.at(1, 1) - 3.0) < 1e-10);
+    }
+
+    negativeDimensionTests() {
+        Qore::Kalman::Matrix a = Qore::Kalman::Matrix::fromRows(((1.0, 2.0), (3.0, 4.0)));
+        Qore::Kalman::Matrix b = Qore::Kalman::Matrix::fromRows(((1.0, 2.0, 3.0),));
+        # add: shape mismatch
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () { a.add(b); });
+        # sub: shape mismatch
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () { a.sub(b); });
+        # mul: inner-dim mismatch (2x2 * 1x3)
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () { a.mul(b); });
+        # fromRows with ragged rows
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () {
+            Qore::Kalman::Matrix::fromRows(((1.0, 2.0), (3.0, 4.0, 5.0)));
+        });
+        # fromRows with wrong element type
+        assertThrows("KALMAN-MATRIX-ERROR", sub () {
+            Qore::Kalman::Matrix::fromRows(("not a list",));
+        });
+        # zeros with negative dim
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () {
+            Qore::Kalman::Matrix::zeros(-1, 3);
+        });
+        # identity with negative size
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () {
+            Qore::Kalman::Matrix::identity(-5);
+        });
+        # at() out of range
+        assertThrows("KALMAN-INDEX-ERROR", sub () { a.at(5, 0); });
+        assertThrows("KALMAN-INDEX-ERROR", sub () { a.at(0, -1); });
+    }
+
+    negativeSingularTests() {
+        # Singular 2x2 (row 2 = 2x row 1).
+        Qore::Kalman::Matrix singular = Qore::Kalman::Matrix::fromRows((
+            (1.0, 2.0),
+            (2.0, 4.0),
+        ));
+        assertThrows("KALMAN-SINGULAR", sub () { singular.inverse(); });
+
+        # Non-square: inverse / determinant / trace / cholesky all undefined.
+        Qore::Kalman::Matrix nonsq = Qore::Kalman::Matrix::fromRows((
+            (1.0, 2.0, 3.0),
+            (4.0, 5.0, 6.0),
+        ));
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () { nonsq.inverse(); });
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () { nonsq.determinant(); });
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () { nonsq.trace(); });
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () { nonsq.cholesky(); });
+
+        # Cholesky on a non-positive-definite matrix.
+        Qore::Kalman::Matrix npd = Qore::Kalman::Matrix::fromRows((
+            (1.0, 2.0),
+            (2.0, 1.0),
+        ));
+        # eigenvalues are 3 and -1, so not positive-definite.
+        assertThrows("KALMAN-NOT-POS-DEF", sub () { npd.cholesky(); });
+    }
+
+    cornerTinyTests() {
+        # 1x1 identity.
+        Qore::Kalman::Matrix one = Qore::Kalman::Matrix::identity(1);
+        assertEq((1, 1), one.shape());
+        assertEq(1.0, one.at(0, 0));
+        assertEq(1.0, one.determinant());
+        assertEq(1.0, one.trace());
+        Qore::Kalman::Matrix one_inv = one.inverse();
+        assertEq(1.0, one_inv.at(0, 0));
+
+        # Empty 0x0 matrix from zeros.
+        Qore::Kalman::Matrix empty = Qore::Kalman::Matrix::zeros(0, 0);
+        assertEq(0, empty.numRows());
+        assertEq(0, empty.numCols());
+        assertEq((0, 0), empty.shape());
+    }
+}

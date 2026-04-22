@@ -1,0 +1,401 @@
+/* -*- mode: c++; indent-tabs-mode: nil -*- */
+/*
+    QC_ExtendedFilter.qpp
+
+    Qore Programming Language
+
+    Copyright (C) 2026 Qore Technologies, s.r.o.
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+*/
+
+#include "QC_ExtendedFilter.h"
+#include "QC_Matrix.h"
+
+#include <qore/ReferenceArgumentHelper.h>
+#include <qore/CallReferenceNode.h>
+
+// ---- C++ implementation ----
+
+QoreExtendedFilter::QoreExtendedFilter(int state_size, int measurement_size)
+    : n(state_size), mdim(measurement_size),
+      x(Eigen::MatrixXd::Zero(state_size, 1)),
+      P(Eigen::MatrixXd::Identity(state_size, state_size)),
+      haveQ(false), haveR(false), haveState(false),
+      predict_count(0), update_count(0) {}
+
+QoreExtendedFilter::~QoreExtendedFilter() {
+    ExceptionSink xsink;
+    predict_cb.discard(&xsink);
+    measurement_cb.discard(&xsink);
+}
+
+static bool checkShape2(const Eigen::MatrixXd& m, Eigen::Index want_rows,
+        Eigen::Index want_cols, const char* name, ExceptionSink* xsink) {
+    if (m.rows() != want_rows || m.cols() != want_cols) {
+        xsink->raiseException("KALMAN-DIMENSION-ERROR",
+            "%s must be %lldx%lld; got %lldx%lld",
+            name, (long long)want_rows, (long long)want_cols,
+            (long long)m.rows(), (long long)m.cols());
+        return false;
+    }
+    return true;
+}
+
+void QoreExtendedFilter::setQ(const Eigen::MatrixXd& Q_, ExceptionSink* xsink) {
+    if (!checkShape2(Q_, n, n, "Q (process noise)", xsink)) return;
+    Q = Q_;
+    haveQ = true;
+}
+
+void QoreExtendedFilter::setR(const Eigen::MatrixXd& R_, ExceptionSink* xsink) {
+    if (!checkShape2(R_, mdim, mdim, "R (measurement noise)", xsink)) return;
+    R = R_;
+    haveR = true;
+}
+
+void QoreExtendedFilter::setState(const Eigen::MatrixXd& x_,
+        const Eigen::MatrixXd& P_, ExceptionSink* xsink) {
+    if (!checkShape2(x_, n, 1, "state vector", xsink)) return;
+    if (!checkShape2(P_, n, n, "covariance matrix", xsink)) return;
+    x = x_;
+    P = P_;
+    haveState = true;
+}
+
+void QoreExtendedFilter::setPredictFunction(QoreValue cb, ExceptionSink* xsink) {
+    predict_cb.discard(xsink);
+    predict_cb = cb.refSelf();
+}
+
+void QoreExtendedFilter::setMeasurementFunction(QoreValue cb, ExceptionSink* xsink) {
+    measurement_cb.discard(xsink);
+    measurement_cb = cb.refSelf();
+}
+
+// Wrap a C++ Eigen matrix in a Qore Matrix-object QoreValue (for
+// passing into a Qore callback).
+static QoreValue wrapEigenValue(const Eigen::MatrixXd& e, ExceptionSink* xsink) {
+    QoreObject* obj = new QoreObject(QC_MATRIX, getProgram());
+    obj->setPrivate(CID_MATRIX, new QoreMatrix(e));
+    return obj;
+}
+
+// Call one of the user callbacks with the current state, and extract
+// (predicted, jacobian) from the returned hash.
+static bool callCallback(QoreValue cb, const Eigen::MatrixXd& x,
+        Eigen::MatrixXd& predicted_out, Eigen::MatrixXd& jacobian_out,
+        Eigen::Index expected_predicted_rows, Eigen::Index expected_jacobian_rows,
+        Eigen::Index expected_jacobian_cols, const char* cb_label,
+        ExceptionSink* xsink) {
+    if (cb.isNullOrNothing()) {
+        xsink->raiseException("KALMAN-STATE-ERROR",
+            "%s not set — call set%sFunction() first", cb_label, cb_label);
+        return false;
+    }
+    if (cb.getType() != NT_RUNTIME_CLOSURE && cb.getType() != NT_FUNCREF) {
+        xsink->raiseException("KALMAN-CALLBACK-ERROR",
+            "%s callback must be a closure or call reference; got %s",
+            cb_label, cb.getTypeName());
+        return false;
+    }
+    const ResolvedCallReferenceNode* ref = cb.get<const ResolvedCallReferenceNode>();
+    ReferenceHolder<QoreListNode> args(new QoreListNode(autoTypeInfo), xsink);
+    args->push(wrapEigenValue(x, xsink), xsink);
+    if (*xsink) return false;
+    ValueHolder rv(ref->execValue(*args, xsink), xsink);
+    if (*xsink) return false;
+    if (rv->getType() != NT_HASH) {
+        xsink->raiseException("KALMAN-CALLBACK-ERROR",
+            "%s callback must return a hash with 'predicted' and 'jacobian' "
+            "keys; got %s", cb_label, rv->getTypeName());
+        return false;
+    }
+    const QoreHashNode* h = rv->get<const QoreHashNode>();
+    QoreValue pv = h->getKeyValue("predicted");
+    QoreValue jv = h->getKeyValue("jacobian");
+    if (pv.getType() != NT_OBJECT || jv.getType() != NT_OBJECT) {
+        xsink->raiseException("KALMAN-CALLBACK-ERROR",
+            "%s callback's 'predicted' and 'jacobian' must both be "
+            "Matrix objects", cb_label);
+        return false;
+    }
+    const QoreObject* po = pv.get<const QoreObject>();
+    const QoreObject* jo = jv.get<const QoreObject>();
+    SimpleRefHolder<QoreMatrix> p(static_cast<QoreMatrix*>(
+        po->getReferencedPrivateData(CID_MATRIX, xsink)));
+    if (*xsink) return false;
+    SimpleRefHolder<QoreMatrix> j(static_cast<QoreMatrix*>(
+        jo->getReferencedPrivateData(CID_MATRIX, xsink)));
+    if (*xsink) return false;
+    if (!p || !j) {
+        xsink->raiseException("KALMAN-CALLBACK-ERROR",
+            "%s callback's 'predicted' or 'jacobian' is not a Matrix", cb_label);
+        return false;
+    }
+    if (p->rows() != expected_predicted_rows || p->cols() != 1) {
+        xsink->raiseException("KALMAN-DIMENSION-ERROR",
+            "%s callback's 'predicted' must be %lldx1; got %lldx%lld",
+            cb_label, (long long)expected_predicted_rows,
+            (long long)p->rows(), (long long)p->cols());
+        return false;
+    }
+    if (j->rows() != expected_jacobian_rows || j->cols() != expected_jacobian_cols) {
+        xsink->raiseException("KALMAN-DIMENSION-ERROR",
+            "%s callback's 'jacobian' must be %lldx%lld; got %lldx%lld",
+            cb_label, (long long)expected_jacobian_rows,
+            (long long)expected_jacobian_cols,
+            (long long)j->rows(), (long long)j->cols());
+        return false;
+    }
+    predicted_out = p->get();
+    jacobian_out = j->get();
+    return true;
+}
+
+void QoreExtendedFilter::predict(ExceptionSink* xsink) {
+    if (!haveQ) {
+        xsink->raiseException("KALMAN-STATE-ERROR",
+            "predict() requires Q (setQ) to be set first");
+        return;
+    }
+    if (!haveState) {
+        xsink->raiseException("KALMAN-STATE-ERROR",
+            "predict() requires the initial state to be set via setState()");
+        return;
+    }
+    Eigen::MatrixXd x_next, F;
+    if (!callCallback(predict_cb, x, x_next, F, n, n, n, "Predict", xsink)) {
+        return;
+    }
+    x = x_next;
+    P = F * P * F.transpose() + Q;
+    ++predict_count;
+}
+
+void QoreExtendedFilter::update(const Eigen::MatrixXd& z, ExceptionSink* xsink) {
+    if (!haveR) {
+        xsink->raiseException("KALMAN-STATE-ERROR",
+            "update() requires R (setR) to be set first");
+        return;
+    }
+    if (!haveState) {
+        xsink->raiseException("KALMAN-STATE-ERROR",
+            "update() requires the initial state to be set via setState()");
+        return;
+    }
+    if (!checkShape2(z, mdim, 1, "observation z", xsink)) return;
+    Eigen::MatrixXd z_pred, H;
+    if (!callCallback(measurement_cb, x, z_pred, H, mdim, mdim, n,
+            "Measurement", xsink)) {
+        return;
+    }
+    // Innovation: y = z - h(x)
+    Eigen::MatrixXd y = z - z_pred;
+    // Innovation covariance: S = H·P·Hᵀ + R
+    Eigen::MatrixXd S = H * P * H.transpose() + R;
+    Eigen::FullPivLU<Eigen::MatrixXd> lu(S);
+    if (!lu.isInvertible()) {
+        xsink->raiseException("KALMAN-SINGULAR",
+            "innovation covariance is singular; check R positive-definiteness "
+            "and H-jacobian well-conditioning");
+        return;
+    }
+    Eigen::MatrixXd K = P * H.transpose() * lu.inverse();
+    x = x + K * y;
+    // Joseph form, same as LinearFilter.
+    Eigen::MatrixXd I = Eigen::MatrixXd::Identity(n, n);
+    Eigen::MatrixXd IKH = I - K * H;
+    P = IKH * P * IKH.transpose() + K * R * K.transpose();
+    ++update_count;
+}
+
+static QoreObject* wrapEigenObj(const Eigen::MatrixXd& e, ExceptionSink* xsink) {
+    QoreObject* obj = new QoreObject(QC_MATRIX, getProgram());
+    obj->setPrivate(CID_MATRIX, new QoreMatrix(e));
+    return obj;
+}
+
+// ---- Qore class definition ----
+
+//! Extended Kalman filter (EKF) — for non-linear dynamics / observations.
+/** The state transition @c f(x) and measurement function @c h(x) are
+    supplied as Qore closures / call references. Each callback must
+    return a hash with two keys:
+
+    - @c predicted: the value of @c f(x) or @c h(x) at the current
+      state — a column @ref Matrix of the appropriate size
+      (state_size for predict, measurement_size for update).
+    - @c jacobian: the linearisation of @c f or @c h around the
+      current state — a @ref Matrix of shape state_size × state_size
+      for predict, measurement_size × state_size for update.
+
+    Covariance update uses the Joseph form — same numerical-stability
+    guarantee as @ref LinearFilter.
+
+    @par Example: bearings-only tracking
+    @code{.py}
+Qore::Kalman::ExtendedFilter ekf(4, 1);  # state_size=4, measurement_size=1
+ekf.setQ(...);
+ekf.setR(...);
+ekf.setState(init_x, init_P);
+
+# Non-linear state transition — here actually linear, showing the
+# shape. f(x) = F·x, jacobian is F.
+code f = sub (Qore::Kalman::Matrix x_cur) {
+    return {
+        "predicted": F_matrix.mul(x_cur),
+        "jacobian": F_matrix,
+    };
+};
+# Non-linear measurement: bearing = atan2(y, x).
+code h = sub (Qore::Kalman::Matrix x_cur) {
+    float px = x_cur.at(0, 0);
+    float py = x_cur.at(1, 0);
+    float bearing = atan2(py, px);
+    float r2 = px * px + py * py;
+    Qore::Kalman::Matrix H = Qore::Kalman::Matrix::fromRows((
+        (-py / r2, px / r2, 0.0, 0.0),
+    ));
+    return {
+        "predicted": Qore::Kalman::Matrix::fromColumn((bearing,)),
+        "jacobian": H,
+    };
+};
+ekf.setPredictFunction(f);
+ekf.setMeasurementFunction(h);
+foreach float b in (bearings) {
+    ekf.predict();
+    ekf.update(Qore::Kalman::Matrix::fromColumn((b,)));
+}
+    @endcode
+*/
+qclass ExtendedFilter [arg=QoreExtendedFilter* ekf; ns=Qore::Kalman];
+
+//! Creates a new EKF with the given dimensions.
+/** @param state_size size of the state vector (positive).
+    @param measurement_size size of the measurement vector (positive).
+
+    @throw KALMAN-DIMENSION-ERROR either size is non-positive.
+*/
+ExtendedFilter::constructor(int state_size, int measurement_size) {
+    if (state_size <= 0) {
+        xsink->raiseException("KALMAN-DIMENSION-ERROR",
+            "state_size must be positive; got %lld", (long long)state_size);
+        return;
+    }
+    if (measurement_size <= 0) {
+        xsink->raiseException("KALMAN-DIMENSION-ERROR",
+            "measurement_size must be positive; got %lld", (long long)measurement_size);
+        return;
+    }
+    self->setPrivate(CID_EXTENDEDFILTER,
+        new QoreExtendedFilter((int)state_size, (int)measurement_size));
+}
+
+//! Sets the process-noise covariance matrix Q.
+/** @param Q @ref Matrix of shape state_size × state_size.
+    @throw KALMAN-DIMENSION-ERROR Q has the wrong shape.
+*/
+nothing ExtendedFilter::setQ(Matrix[QoreMatrix] Q) {
+    ekf->setQ(Q->get(), xsink);
+}
+
+//! Sets the measurement-noise covariance matrix R.
+/** @param R @ref Matrix of shape measurement_size × measurement_size.
+    @throw KALMAN-DIMENSION-ERROR R has the wrong shape.
+*/
+nothing ExtendedFilter::setR(Matrix[QoreMatrix] R) {
+    ekf->setR(R->get(), xsink);
+}
+
+//! Sets the initial state vector and covariance.
+/** @param x_init state vector, @ref Matrix of shape state_size × 1.
+    @param P_init covariance, @ref Matrix of shape state_size × state_size.
+    @throw KALMAN-DIMENSION-ERROR shapes do not match filter dimensions.
+*/
+nothing ExtendedFilter::setState(Matrix[QoreMatrix] x_init, Matrix[QoreMatrix] P_init) {
+    ekf->setState(x_init->get(), P_init->get(), xsink);
+}
+
+//! Sets the state-transition callback.
+/** @param f a closure / call reference taking one @ref Matrix argument
+        (current state, state_size × 1) and returning a hash with keys
+        @c predicted (state_size × 1 @ref Matrix) and @c jacobian
+        (state_size × state_size @ref Matrix).
+*/
+nothing ExtendedFilter::setPredictFunction(code f) {
+    ekf->setPredictFunction(f, xsink);
+}
+
+//! Sets the measurement callback.
+/** @param h a closure / call reference taking one @ref Matrix argument
+        (current state, state_size × 1) and returning a hash with keys
+        @c predicted (measurement_size × 1 @ref Matrix) and @c jacobian
+        (measurement_size × state_size @ref Matrix).
+*/
+nothing ExtendedFilter::setMeasurementFunction(code h) {
+    ekf->setMeasurementFunction(h, xsink);
+}
+
+//! Runs the predict step via the configured state-transition callback.
+/** @throw KALMAN-STATE-ERROR callbacks / Q / state not set.
+    @throw KALMAN-CALLBACK-ERROR callback returned an unexpected shape.
+*/
+nothing ExtendedFilter::predict() {
+    ekf->predict(xsink);
+}
+
+//! Runs the update step via the configured measurement callback.
+/** @param z observation vector, @ref Matrix of shape measurement_size × 1.
+
+    @throw KALMAN-STATE-ERROR callback / R / state not set.
+    @throw KALMAN-DIMENSION-ERROR observation has the wrong shape.
+    @throw KALMAN-SINGULAR innovation covariance is singular.
+*/
+nothing ExtendedFilter::update(Matrix[QoreMatrix] z) {
+    ekf->update(z->get(), xsink);
+}
+
+//! Returns the current filter state + covariance + step counters.
+/** @return a @ref KalmanFilterState hash with the current (x, P) and
+    the predict / update call counters.
+*/
+hash<KalmanFilterState> ExtendedFilter::state() [flags=RET_VALUE_ONLY] {
+    ReferenceHolder<QoreHashNode> h(new QoreHashNode(hashdeclKalmanFilterState, xsink), xsink);
+    h->setKeyValue("state", wrapEigenObj(ekf->getState(), xsink), xsink);
+    h->setKeyValue("covariance", wrapEigenObj(ekf->getCovariance(), xsink), xsink);
+    h->setKeyValue("update_count", ekf->getUpdateCount(), xsink);
+    h->setKeyValue("predict_count", ekf->getPredictCount(), xsink);
+    return h.release();
+}
+
+//! Returns the filter's configured state-vector size.
+/** Fixed at construction; cannot change.
+*/
+int ExtendedFilter::stateSize() [flags=CONSTANT] {
+    return ekf->stateSize();
+}
+
+//! Returns the filter's configured measurement-vector size.
+/** Fixed at construction; cannot change.
+*/
+int ExtendedFilter::measurementSize() [flags=CONSTANT] {
+    return ekf->measurementSize();
+}

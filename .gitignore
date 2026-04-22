@@ -1,0 +1,20 @@
+# build artefacts
+build/
+*.o
+*.obj
+*.so
+*.dylib
+*.qmod
+
+# editor junk
+*.swp
+*~
+.vscode/
+.idea/
+
+# doxygen output
+docs/html/
+docs/latex/
+
+# OS
+.DS_Store

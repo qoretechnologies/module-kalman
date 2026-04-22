@@ -1,0 +1,389 @@
+/* -*- mode: c++; indent-tabs-mode: nil -*- */
+/*
+    QC_Matrix.qpp
+
+    Qore Programming Language
+
+    Copyright (C) 2026 Qore Technologies, s.r.o.
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+*/
+
+#include "QC_Matrix.h"
+
+// ---- C++ factory implementations ----
+
+QoreMatrix* QoreMatrix::fromRows(const QoreListNode* rows, ExceptionSink* xsink) {
+    size_t n_rows = rows->size();
+    if (n_rows == 0) {
+        return new QoreMatrix(Eigen::MatrixXd(0, 0));
+    }
+    // Resolve column count from first row, then require every row to match.
+    QoreValue first = rows->retrieveEntry(0);
+    if (first.getType() != NT_LIST) {
+        xsink->raiseException("KALMAN-MATRIX-ERROR",
+            "row 0 must be a list of floats, got %s", first.getTypeName());
+        return nullptr;
+    }
+    size_t n_cols = first.get<const QoreListNode>()->size();
+
+    Eigen::MatrixXd m(static_cast<Eigen::Index>(n_rows), static_cast<Eigen::Index>(n_cols));
+    for (size_t i = 0; i < n_rows; ++i) {
+        QoreValue rv = rows->retrieveEntry(i);
+        if (rv.getType() != NT_LIST) {
+            xsink->raiseException("KALMAN-MATRIX-ERROR",
+                "row %zu must be a list of floats, got %s", i, rv.getTypeName());
+            return nullptr;
+        }
+        const QoreListNode* r = rv.get<const QoreListNode>();
+        if (r->size() != n_cols) {
+            xsink->raiseException("KALMAN-DIMENSION-ERROR",
+                "row %zu has %zu columns; expected %zu",
+                i, r->size(), n_cols);
+            return nullptr;
+        }
+        for (size_t j = 0; j < n_cols; ++j) {
+            m(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) =
+                r->retrieveEntry(j).getAsFloat();
+        }
+    }
+    return new QoreMatrix(std::move(m));
+}
+
+QoreMatrix* QoreMatrix::fromColumn(const QoreListNode* col, ExceptionSink* xsink) {
+    (void)xsink;
+    size_t n = col->size();
+    Eigen::MatrixXd m(static_cast<Eigen::Index>(n), 1);
+    for (size_t i = 0; i < n; ++i) {
+        m(static_cast<Eigen::Index>(i), 0) = col->retrieveEntry(i).getAsFloat();
+    }
+    return new QoreMatrix(std::move(m));
+}
+
+QoreMatrix* QoreMatrix::zeros(int64 r, int64 c, ExceptionSink* xsink) {
+    if (r < 0 || c < 0) {
+        xsink->raiseException("KALMAN-DIMENSION-ERROR",
+            "matrix dimensions must be non-negative; got (%lld, %lld)",
+            (long long)r, (long long)c);
+        return nullptr;
+    }
+    return new QoreMatrix(Eigen::MatrixXd::Zero(
+        static_cast<Eigen::Index>(r), static_cast<Eigen::Index>(c)));
+}
+
+QoreMatrix* QoreMatrix::identity(int64 n, ExceptionSink* xsink) {
+    if (n < 0) {
+        xsink->raiseException("KALMAN-DIMENSION-ERROR",
+            "identity size must be non-negative; got %lld", (long long)n);
+        return nullptr;
+    }
+    return new QoreMatrix(Eigen::MatrixXd::Identity(
+        static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n)));
+}
+
+// Helper: wrap a freshly-built Matrix in a Qore object.
+static QoreValue wrapMatrix(QoreMatrix* m, ExceptionSink* xsink) {
+    if (!m) {
+        return QoreValue();
+    }
+    ReferenceHolder<QoreObject> obj(new QoreObject(QC_MATRIX, getProgram()), xsink);
+    obj->setPrivate(CID_MATRIX, m);
+    return obj.release();
+}
+
+// ---- Qore class definition ----
+
+//! Dense matrix primitive for Kalman-filter work — thin wrapper around Eigen::MatrixXd.
+/** Immutable after construction: every arithmetic operation returns a new
+    @ref Matrix, the receiver is never mutated. That means a single
+    @ref Matrix instance is safe to share across threads without locking.
+
+    Intended primarily to feed the filter classes (setF/setH/setQ/setR
+    on @ref LinearFilter, and the Jacobian return values on
+    @ref ExtendedFilter), but can also be used standalone for small-to-
+    medium linear algebra work. For heavy numerical pipelines, Eigen
+    itself via C++ is still faster — this class carries a per-operation
+    Qore↔C++ marshal cost.
+
+    @par Example:
+    @code{.py}
+Qore::Kalman::Matrix m = Qore::Kalman::Matrix::fromRows((
+    (1.0, 2.0),
+    (3.0, 4.0),
+));
+Qore::Kalman::Matrix mt = m.transpose();
+Qore::Kalman::Matrix prod = m.mul(mt);
+float d = m.determinant();  # -2.0
+    @endcode
+*/
+qclass Matrix [arg=QoreMatrix* m; ns=Qore::Kalman];
+
+//! Creates a matrix from a row-major list-of-lists of floats.
+/** @param rows list of rows; each row is a list of floats. All rows
+        must have the same length.
+    @return a new @ref Matrix.
+
+    @throw KALMAN-MATRIX-ERROR any element is not a list / float.
+    @throw KALMAN-DIMENSION-ERROR rows have inconsistent lengths.
+
+    @par Example:
+    @code{.py}
+Qore::Kalman::Matrix m = Qore::Kalman::Matrix::fromRows((
+    (1.0, 0.0),
+    (0.0, 1.0),
+));
+    @endcode
+*/
+static Matrix Matrix::fromRows(list<auto> rows) {
+    QoreMatrix* m = QoreMatrix::fromRows(rows, xsink);
+    return wrapMatrix(m, xsink);
+}
+
+//! Creates a column vector from a list of floats.
+/** @param col list of floats — becomes a matrix with N rows, 1 column.
+    @return a new Nx1 @ref Matrix.
+
+    @par Example:
+    @code{.py}
+Qore::Kalman::Matrix v = Qore::Kalman::Matrix::fromColumn((1.0, 2.0, 3.0));
+    @endcode
+*/
+static Matrix Matrix::fromColumn(list<auto> col) {
+    QoreMatrix* m = QoreMatrix::fromColumn(col, xsink);
+    return wrapMatrix(m, xsink);
+}
+
+//! Creates a zero-valued matrix with the given shape.
+/** @param rows number of rows (non-negative).
+    @param cols number of columns (non-negative).
+    @return a new @ref Matrix filled with zeros.
+
+    @throw KALMAN-DIMENSION-ERROR either dimension is negative.
+*/
+static Matrix Matrix::zeros(int rows, int cols) {
+    QoreMatrix* m = QoreMatrix::zeros(rows, cols, xsink);
+    return wrapMatrix(m, xsink);
+}
+
+//! Creates an identity matrix of the given size.
+/** @param n matrix order (non-negative). Produces an NxN identity.
+    @return a new NxN identity @ref Matrix.
+
+    @throw KALMAN-DIMENSION-ERROR n is negative.
+*/
+static Matrix Matrix::identity(int n) {
+    QoreMatrix* m = QoreMatrix::identity(n, xsink);
+    return wrapMatrix(m, xsink);
+}
+
+//! Number of rows.
+/** @return the row count.
+*/
+int Matrix::numRows() [flags=CONSTANT] {
+    return m->rows();
+}
+
+//! Number of columns.
+/** @return the column count.
+*/
+int Matrix::numCols() [flags=CONSTANT] {
+    return m->cols();
+}
+
+//! Returns the matrix shape as a two-element list \c (rows, cols).
+/** @return a two-element list — first element is row count, second is
+    column count.
+*/
+list<int> Matrix::shape() [flags=CONSTANT] {
+    ReferenceHolder<QoreListNode> out(new QoreListNode(bigIntTypeInfo), xsink);
+    out->push(m->rows(), xsink);
+    out->push(m->cols(), xsink);
+    return out.release();
+}
+
+//! Element access — returns the value at (row, col).
+/** @param row zero-based row index.
+    @param col zero-based column index.
+
+    @throw KALMAN-INDEX-ERROR index out of range.
+*/
+float Matrix::at(int row, int col) [flags=RET_VALUE_ONLY] {
+    if (row < 0 || row >= m->rows() || col < 0 || col >= m->cols()) {
+        xsink->raiseException("KALMAN-INDEX-ERROR",
+            "index (%lld, %lld) out of range for %lldx%lld matrix",
+            (long long)row, (long long)col, (long long)m->rows(), (long long)m->cols());
+        return 0.0;
+    }
+    return m->get()(static_cast<Eigen::Index>(row),
+                    static_cast<Eigen::Index>(col));
+}
+
+//! Returns the matrix as a list-of-lists of floats (row-major).
+/** @return a list of row lists; each row is a list of floats with
+    length equal to numCols().
+*/
+list<list<float>> Matrix::toRows() [flags=CONSTANT] {
+    const Eigen::MatrixXd& e = m->get();
+    ReferenceHolder<QoreListNode> out(new QoreListNode(listTypeInfo), xsink);
+    for (Eigen::Index i = 0; i < e.rows(); ++i) {
+        ReferenceHolder<QoreListNode> row(new QoreListNode(floatTypeInfo), xsink);
+        for (Eigen::Index j = 0; j < e.cols(); ++j) {
+            row->push(e(i, j), xsink);
+        }
+        out->push(row.release(), xsink);
+    }
+    return out.release();
+}
+
+//! Matrix addition.
+/** @param other a @ref Matrix with the same shape.
+    @throw KALMAN-DIMENSION-ERROR shapes do not match.
+*/
+Matrix Matrix::add(Matrix[QoreMatrix] other) [flags=RET_VALUE_ONLY] {
+    if (m->rows() != other->rows() || m->cols() != other->cols()) {
+        xsink->raiseException("KALMAN-DIMENSION-ERROR",
+            "cannot add %lldx%lld to %lldx%lld",
+            (long long)m->rows(), (long long)m->cols(),
+            (long long)other->rows(), (long long)other->cols());
+        return QoreValue();
+    }
+    return wrapMatrix(new QoreMatrix(m->get() + other->get()), xsink);
+}
+
+//! Matrix subtraction.
+/** @param other a @ref Matrix with the same shape.
+    @throw KALMAN-DIMENSION-ERROR shapes do not match.
+*/
+Matrix Matrix::sub(Matrix[QoreMatrix] other) [flags=RET_VALUE_ONLY] {
+    if (m->rows() != other->rows() || m->cols() != other->cols()) {
+        xsink->raiseException("KALMAN-DIMENSION-ERROR",
+            "cannot subtract %lldx%lld from %lldx%lld",
+            (long long)other->rows(), (long long)other->cols(),
+            (long long)m->rows(), (long long)m->cols());
+        return QoreValue();
+    }
+    return wrapMatrix(new QoreMatrix(m->get() - other->get()), xsink);
+}
+
+//! Matrix × matrix OR matrix × scalar multiplication.
+/** Overloaded: when \c other is a @ref Matrix, does standard matrix
+    multiplication (this_cols must equal other_rows). When \c other is
+    a float, does scalar multiplication.
+
+    @throw KALMAN-DIMENSION-ERROR matrix dimensions don't chain.
+*/
+Matrix Matrix::mul(Matrix[QoreMatrix] other) [flags=RET_VALUE_ONLY] {
+    if (m->cols() != other->rows()) {
+        xsink->raiseException("KALMAN-DIMENSION-ERROR",
+            "cannot multiply %lldx%lld by %lldx%lld (inner dims differ)",
+            (long long)m->rows(), (long long)m->cols(),
+            (long long)other->rows(), (long long)other->cols());
+        return QoreValue();
+    }
+    return wrapMatrix(new QoreMatrix(m->get() * other->get()), xsink);
+}
+
+//! Scalar multiplication — multiplies every element by \c scalar.
+/** @param scalar the float to multiply every element by.
+    @return a new @ref Matrix of the same shape with each element
+    multiplied by @c scalar.
+*/
+Matrix Matrix::mul(float scalar) [flags=CONSTANT] {
+    return wrapMatrix(new QoreMatrix(m->get() * scalar), xsink);
+}
+
+//! Matrix transpose.
+/** @return a new @ref Matrix with rows and columns swapped — shape
+    (numCols, numRows).
+*/
+Matrix Matrix::transpose() [flags=CONSTANT] {
+    return wrapMatrix(new QoreMatrix(m->get().transpose()), xsink);
+}
+
+//! Matrix inverse via LU decomposition (Eigen).
+/** @throw KALMAN-SINGULAR matrix is singular (or very ill-conditioned).
+    @throw KALMAN-DIMENSION-ERROR matrix is not square.
+*/
+Matrix Matrix::inverse() [flags=RET_VALUE_ONLY] {
+    if (m->rows() != m->cols()) {
+        xsink->raiseException("KALMAN-DIMENSION-ERROR",
+            "cannot invert non-square %lldx%lld matrix",
+            (long long)m->rows(), (long long)m->cols());
+        return QoreValue();
+    }
+    // Use FullPivLU so we can detect non-invertibility cleanly.
+    Eigen::FullPivLU<Eigen::MatrixXd> lu(m->get());
+    if (!lu.isInvertible()) {
+        xsink->raiseException("KALMAN-SINGULAR",
+            "matrix is singular or too ill-conditioned to invert");
+        return QoreValue();
+    }
+    return wrapMatrix(new QoreMatrix(lu.inverse()), xsink);
+}
+
+//! Matrix determinant.
+/** @throw KALMAN-DIMENSION-ERROR matrix is not square.
+*/
+float Matrix::determinant() [flags=RET_VALUE_ONLY] {
+    if (m->rows() != m->cols()) {
+        xsink->raiseException("KALMAN-DIMENSION-ERROR",
+            "determinant undefined for non-square %lldx%lld matrix",
+            (long long)m->rows(), (long long)m->cols());
+        return 0.0;
+    }
+    return m->get().determinant();
+}
+
+//! Sum of diagonal entries.
+/** @throw KALMAN-DIMENSION-ERROR matrix is not square.
+*/
+float Matrix::trace() [flags=RET_VALUE_ONLY] {
+    if (m->rows() != m->cols()) {
+        xsink->raiseException("KALMAN-DIMENSION-ERROR",
+            "trace undefined for non-square %lldx%lld matrix",
+            (long long)m->rows(), (long long)m->cols());
+        return 0.0;
+    }
+    return m->get().trace();
+}
+
+//! Cholesky decomposition — returns the lower-triangular factor \c L such that \c A = L·Lᵀ.
+/** Requires a symmetric positive-definite matrix. Covariance matrices
+    in Kalman filters are symmetric positive-definite by construction,
+    so this is the natural primitive for square-root filter variants.
+
+    @throw KALMAN-DIMENSION-ERROR matrix is not square.
+    @throw KALMAN-NOT-POS-DEF matrix is not positive-definite.
+*/
+Matrix Matrix::cholesky() [flags=RET_VALUE_ONLY] {
+    if (m->rows() != m->cols()) {
+        xsink->raiseException("KALMAN-DIMENSION-ERROR",
+            "cholesky undefined for non-square %lldx%lld matrix",
+            (long long)m->rows(), (long long)m->cols());
+        return QoreValue();
+    }
+    Eigen::LLT<Eigen::MatrixXd> llt(m->get());
+    if (llt.info() != Eigen::Success) {
+        xsink->raiseException("KALMAN-NOT-POS-DEF",
+            "matrix is not symmetric positive-definite; "
+            "cholesky decomposition failed");
+        return QoreValue();
+    }
+    return wrapMatrix(new QoreMatrix(llt.matrixL()), xsink);
+}

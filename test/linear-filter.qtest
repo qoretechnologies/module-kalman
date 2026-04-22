@@ -1,0 +1,301 @@
+#!/usr/bin/env qore
+# -*- mode: qore; indent-tabs-mode: nil -*-
+
+%modern
+%enable-all-warnings
+%requires kalman
+%requires QUnit
+
+%exec-class LinearFilterTest
+
+public class LinearFilterTest inherits QUnit::Test {
+    constructor() : Test("LinearFilterTest", "1.0") {
+        addTestCase("construction + dimension accessors", \constructionTests());
+        addTestCase("one-step predict+update produces expected smoothing",
+            \singleStepTests());
+        addTestCase("100-step 2D constant-velocity tracking integration",
+            \cvTrackingIntegrationTests());
+        addTestCase("control-input path (predict with u)",
+            \controlInputTests());
+        addTestCase("state/covariance counters", \counterTests());
+        addTestCase("negative: missing setters",
+            \negativeMissingSettersTests());
+        addTestCase("negative: dimension mismatches",
+            \negativeDimensionTests());
+        addTestCase("corner: predict-only (never observe)",
+            \predictOnlyTests());
+        addTestCase("corner: zero process noise",
+            \zeroProcessNoiseTests());
+        set_return_value(main());
+    }
+
+    # Helper: build a 2D constant-velocity filter with standard CV F/Q
+    # for timestep dt and process-noise sigma_a.
+    private Qore::Kalman::LinearFilter buildCvFilter(float dt, float sigma_a, float sigma_meas) {
+        Qore::Kalman::LinearFilter kf(<LinearFilterOptions>{
+            "state_size": 4,
+            "measurement_size": 2,
+        });
+        Qore::Kalman::Matrix F = Qore::Kalman::Matrix::fromRows((
+            (1.0, 0.0, dt,  0.0),
+            (0.0, 1.0, 0.0, dt),
+            (0.0, 0.0, 1.0, 0.0),
+            (0.0, 0.0, 0.0, 1.0),
+        ));
+        Qore::Kalman::Matrix H = Qore::Kalman::Matrix::fromRows((
+            (1.0, 0.0, 0.0, 0.0),
+            (0.0, 1.0, 0.0, 0.0),
+        ));
+        float s2 = sigma_a * sigma_a;
+        Qore::Kalman::Matrix Q = Qore::Kalman::Matrix::fromRows((
+            (dt * dt * dt * dt / 4.0 * s2, 0.0, dt * dt * dt / 2.0 * s2, 0.0),
+            (0.0, dt * dt * dt * dt / 4.0 * s2, 0.0, dt * dt * dt / 2.0 * s2),
+            (dt * dt * dt / 2.0 * s2, 0.0, dt * dt * s2, 0.0),
+            (0.0, dt * dt * dt / 2.0 * s2, 0.0, dt * dt * s2),
+        ));
+        float r = sigma_meas * sigma_meas;
+        Qore::Kalman::Matrix R = Qore::Kalman::Matrix::fromRows((
+            (r, 0.0),
+            (0.0, r),
+        ));
+        kf.setF(F);
+        kf.setH(H);
+        kf.setQ(Q);
+        kf.setR(R);
+        kf.setState(
+            Qore::Kalman::Matrix::fromColumn((0.0, 0.0, 0.0, 0.0)),
+            Qore::Kalman::Matrix::identity(4).mul(100.0));
+        return kf;
+    }
+
+    constructionTests() {
+        Qore::Kalman::LinearFilter kf(<LinearFilterOptions>{
+            "state_size": 4,
+            "measurement_size": 2,
+        });
+        assertEq(4, kf.stateSize());
+        assertEq(2, kf.measurementSize());
+        assertEq(0, kf.controlSize());
+        hash<KalmanFilterState> s = kf.state();
+        assertEq(0, s.predict_count);
+        assertEq(0, s.update_count);
+    }
+
+    singleStepTests() {
+        # Very noisy initial P + low-noise measurement → posterior
+        # should jump close to the observation.
+        Qore::Kalman::LinearFilter kf = buildCvFilter(0.1, 0.5, 1.0);
+        kf.predict();
+        kf.update(Qore::Kalman::Matrix::fromColumn((10.0, 20.0)));
+        hash<KalmanFilterState> s = kf.state();
+        # Posterior x should be near (10, 20) since measurement noise
+        # (σ=1) is much smaller than initial P (=100).
+        assertTrue(abs(s.state.at(0, 0) - 10.0) < 1.0);
+        assertTrue(abs(s.state.at(1, 0) - 20.0) < 1.0);
+        assertEq(1, s.predict_count);
+        assertEq(1, s.update_count);
+    }
+
+    cvTrackingIntegrationTests() {
+        # Simulate a point moving at constant velocity (5 m/s in each
+        # axis) for 100 steps with dt=0.1, add gaussian measurement
+        # noise of σ=2.0, and confirm the filtered position MSE is
+        # lower than the raw-observation MSE.
+        float dt = 0.1;
+        float sigma_meas = 2.0;
+        Qore::Kalman::LinearFilter kf = buildCvFilter(dt, 0.1, sigma_meas);
+
+        float raw_sq_err = 0.0;
+        float filt_sq_err = 0.0;
+        for (int i = 0; i < 100; ++i) {
+            float t = i * dt;
+            float true_x = 5.0 * t;
+            float true_y = 5.0 * t;
+            # Deterministic "noise" sequence so the test is repeatable:
+            # sinusoidal displacement around the truth.
+            float noise_x = sigma_meas * sin(i * 0.3);
+            float noise_y = sigma_meas * cos(i * 0.3);
+            float obs_x = true_x + noise_x;
+            float obs_y = true_y + noise_y;
+            raw_sq_err += noise_x * noise_x + noise_y * noise_y;
+
+            kf.predict();
+            kf.update(Qore::Kalman::Matrix::fromColumn((obs_x, obs_y)));
+            hash<KalmanFilterState> s = kf.state();
+            float dx = s.state.at(0, 0) - true_x;
+            float dy = s.state.at(1, 0) - true_y;
+            filt_sq_err += dx * dx + dy * dy;
+        }
+
+        # Filter should denoise — filtered MSE materially lower than raw.
+        # Expect at least 2x reduction on a clean deterministic scenario.
+        assertTrue(filt_sq_err < raw_sq_err / 2.0,
+            sprintf("expected filtered MSE < raw MSE / 2; got filt=%.2f raw=%.2f",
+                filt_sq_err, raw_sq_err));
+
+        # After 100 steps at constant velocity 5, velocity estimate
+        # should converge close to the truth.
+        hash<KalmanFilterState> result = kf.state();
+        assertTrue(abs(result.state.at(2, 0) - 5.0) < 0.5,
+            sprintf("vx should converge to 5.0; got %.3f", result.state.at(2, 0)));
+        assertTrue(abs(result.state.at(3, 0) - 5.0) < 0.5,
+            sprintf("vy should converge to 5.0; got %.3f", result.state.at(3, 0)));
+        assertEq(100, result.predict_count);
+        assertEq(100, result.update_count);
+    }
+
+    controlInputTests() {
+        # 1D filter with a control input that shifts the state by +1
+        # per step. Observation just reads the state.
+        Qore::Kalman::LinearFilter kf(<LinearFilterOptions>{
+            "state_size": 1,
+            "measurement_size": 1,
+            "control_size": 1,
+        });
+        kf.setF(Qore::Kalman::Matrix::fromRows(((1.0,),)));
+        kf.setH(Qore::Kalman::Matrix::fromRows(((1.0,),)));
+        kf.setB(Qore::Kalman::Matrix::fromRows(((1.0,),)));  # B: 1x1 identity
+        kf.setQ(Qore::Kalman::Matrix::identity(1).mul(0.01));
+        kf.setR(Qore::Kalman::Matrix::identity(1).mul(0.1));
+        kf.setState(
+            Qore::Kalman::Matrix::fromColumn((0.0,)),
+            Qore::Kalman::Matrix::identity(1).mul(10.0));
+
+        # Apply control u=1 repeatedly. State should climb by 1 per step.
+        kf.predict(Qore::Kalman::Matrix::fromColumn((1.0,)));
+        assertTrue(abs(kf.state().state.at(0, 0) - 1.0) < 0.001);
+        kf.predict(Qore::Kalman::Matrix::fromColumn((1.0,)));
+        assertTrue(abs(kf.state().state.at(0, 0) - 2.0) < 0.001);
+        # Observation near the predicted state — posterior stays close.
+        kf.update(Qore::Kalman::Matrix::fromColumn((2.1,)));
+        assertTrue(abs(kf.state().state.at(0, 0) - 2.1) < 0.5);
+    }
+
+    counterTests() {
+        Qore::Kalman::LinearFilter kf = buildCvFilter(0.1, 0.5, 1.0);
+        for (int i = 0; i < 5; ++i) {
+            kf.predict();
+            kf.update(Qore::Kalman::Matrix::fromColumn((float(i), float(i))));
+        }
+        hash<KalmanFilterState> s = kf.state();
+        assertEq(5, s.predict_count);
+        assertEq(5, s.update_count);
+    }
+
+    negativeMissingSettersTests() {
+        # Uninitialised filter — predict() without F/Q set.
+        Qore::Kalman::LinearFilter kf(<LinearFilterOptions>{
+            "state_size": 2,
+            "measurement_size": 2,
+        });
+        assertThrows("KALMAN-STATE-ERROR", sub () { kf.predict(); });
+        # Set F+Q but not state — still errors.
+        kf.setF(Qore::Kalman::Matrix::identity(2));
+        kf.setQ(Qore::Kalman::Matrix::identity(2));
+        assertThrows("KALMAN-STATE-ERROR", sub () { kf.predict(); });
+        # Set state — predict now works.
+        kf.setState(
+            Qore::Kalman::Matrix::fromColumn((0.0, 0.0)),
+            Qore::Kalman::Matrix::identity(2));
+        kf.predict();  # should not throw
+        # update() without H/R still errors.
+        assertThrows("KALMAN-STATE-ERROR", sub () {
+            kf.update(Qore::Kalman::Matrix::fromColumn((1.0, 1.0)));
+        });
+    }
+
+    negativeDimensionTests() {
+        Qore::Kalman::LinearFilter kf(<LinearFilterOptions>{
+            "state_size": 4,
+            "measurement_size": 2,
+        });
+        # F must be 4x4.
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () {
+            kf.setF(Qore::Kalman::Matrix::identity(3));
+        });
+        # H must be 2x4.
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () {
+            kf.setH(Qore::Kalman::Matrix::identity(4));
+        });
+        # Q must be 4x4.
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () {
+            kf.setQ(Qore::Kalman::Matrix::identity(2));
+        });
+        # R must be 2x2.
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () {
+            kf.setR(Qore::Kalman::Matrix::identity(4));
+        });
+        # State vector wrong size.
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () {
+            kf.setState(
+                Qore::Kalman::Matrix::fromColumn((0.0,)),
+                Qore::Kalman::Matrix::identity(4));
+        });
+        # Non-positive sizes at construction.
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () {
+            new Qore::Kalman::LinearFilter(<LinearFilterOptions>{
+                "state_size": 0,
+                "measurement_size": 2,
+            });
+        });
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () {
+            new Qore::Kalman::LinearFilter(<LinearFilterOptions>{
+                "state_size": 2,
+                "measurement_size": -1,
+            });
+        });
+        # Wrong observation size on update.
+        Qore::Kalman::LinearFilter kf2 = buildCvFilter(0.1, 0.5, 1.0);
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () {
+            kf2.update(Qore::Kalman::Matrix::fromColumn((1.0, 2.0, 3.0)));
+        });
+        # Using predict(u) on a no-control filter.
+        assertThrows("KALMAN-STATE-ERROR", sub () {
+            kf2.predict(Qore::Kalman::Matrix::fromColumn((1.0,)));
+        });
+        # Setting B on a no-control filter.
+        assertThrows("KALMAN-STATE-ERROR", sub () {
+            kf2.setB(Qore::Kalman::Matrix::identity(4));
+        });
+    }
+
+    predictOnlyTests() {
+        # Predict-only: run 20 predict steps, never observe.
+        # Covariance should grow monotonically (uncertainty increasing).
+        Qore::Kalman::LinearFilter kf = buildCvFilter(0.1, 0.5, 1.0);
+        hash<KalmanFilterState> initial = kf.state();
+        float initial_trace = initial.covariance.trace();
+        for (int i = 0; i < 20; ++i) {
+            kf.predict();
+        }
+        hash<KalmanFilterState> after = kf.state();
+        float after_trace = after.covariance.trace();
+        assertTrue(after_trace > initial_trace,
+            sprintf("predict-only: covariance trace should grow "
+                "(initial=%.3f, after 20 predicts=%.3f)",
+                initial_trace, after_trace));
+        assertEq(20, after.predict_count);
+        assertEq(0, after.update_count);
+    }
+
+    zeroProcessNoiseTests() {
+        # Q = 0 → filter treats the motion model as exact, rejects
+        # observation noise aggressively once enough observations are
+        # accumulated. Tests the numerical stability of the Joseph
+        # form under an edge case that would easily make the simpler
+        # update path go non-PD.
+        Qore::Kalman::LinearFilter kf = buildCvFilter(0.1, 0.0, 1.0);
+        for (int i = 0; i < 30; ++i) {
+            kf.predict();
+            kf.update(Qore::Kalman::Matrix::fromColumn((float(i), float(i))));
+        }
+        hash<KalmanFilterState> result = kf.state();
+        # No explosion in state values.
+        assertTrue(abs(result.state.at(0, 0)) < 1e6);
+        assertTrue(abs(result.state.at(1, 0)) < 1e6);
+        # Covariance should be small on the diagonal — many observations
+        # with no process noise collapses uncertainty hard.
+        assertTrue(result.covariance.at(0, 0) < 10.0);
+        assertTrue(result.covariance.at(1, 1) < 10.0);
+    }
+}
