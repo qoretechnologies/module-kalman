@@ -1,0 +1,161 @@
+#!/usr/bin/env qore
+# -*- mode: qore; indent-tabs-mode: nil -*-
+
+%modern
+%enable-all-warnings
+%requires kalman
+%requires QUnit
+
+%exec-class FactoriesTest
+
+# 1.1 tests: pre-baked model factories + LinearFilter::stepBatch.
+
+public class FactoriesTest inherits QUnit::Test {
+    constructor() : Test("FactoriesTest", "1.1") {
+        addTestCase("newConstantVelocity2D shape + basic smoothing",
+            \cvFactoryTests());
+        addTestCase("newConstantAcceleration2D shape + tracks acceleration",
+            \caFactoryTests());
+        addTestCase("newGpsSmoother matches CV with same parameters",
+            \gpsSmootherTests());
+        addTestCase("stepBatch returns per-step posterior, matches sequential",
+            \stepBatchTests());
+        addTestCase("stepBatch: negative (non-Matrix elements)",
+            \stepBatchNegativeTests());
+        addTestCase("stepBatch: empty observation list",
+            \stepBatchEmptyTests());
+        set_return_value(main());
+    }
+
+    cvFactoryTests() {
+        Qore::Kalman::LinearFilter kf = Qore::Kalman::newConstantVelocity2D(0.1, 0.5, 1.0);
+        assertEq(4, kf.stateSize());
+        assertEq(2, kf.measurementSize());
+        assertEq(0, kf.controlSize());
+
+        # Feed a straight-line trajectory at v=10 for 50 steps and
+        # check velocity convergence.
+        float dt = 0.1;
+        for (int i = 0; i < 50; ++i) {
+            kf.predict();
+            float x = 10.0 * i * dt;
+            kf.update(Qore::Kalman::Matrix::fromColumn((x, 0.0)));
+        }
+        hash<KalmanFilterState> s = kf.state();
+        assertTrue(abs(s.state.at(2, 0) - 10.0) < 0.5,
+            sprintf("vx should converge to ~10; got %.3f", s.state.at(2, 0)));
+        assertTrue(abs(s.state.at(3, 0)) < 0.5,
+            sprintf("vy should converge to ~0; got %.3f", s.state.at(3, 0)));
+    }
+
+    caFactoryTests() {
+        Qore::Kalman::LinearFilter kf = Qore::Kalman::newConstantAcceleration2D(0.1, 0.1, 0.5);
+        assertEq(6, kf.stateSize());
+        assertEq(2, kf.measurementSize());
+
+        # Truth: acceleration a=2 m/s² on x axis, starting from rest.
+        # Position at t: 0.5 * a * t² = t²
+        float dt = 0.1;
+        for (int i = 0; i < 50; ++i) {
+            float t = i * dt;
+            float true_x = t * t;           # a=2, so 0.5 * 2 * t² = t²
+            kf.predict();
+            kf.update(Qore::Kalman::Matrix::fromColumn((true_x, 0.0)));
+        }
+        hash<KalmanFilterState> s = kf.state();
+        # x-position should track truth.
+        float final_t = 49.0 * dt;
+        float truth_x = final_t * final_t;
+        assertTrue(abs(s.state.at(0, 0) - truth_x) < 1.0,
+            sprintf("x should track truth (expected ~%.2f, got %.2f)",
+                truth_x, s.state.at(0, 0)));
+        # x-acceleration (index 4) should converge near 2.0.
+        assertTrue(abs(s.state.at(4, 0) - 2.0) < 0.8,
+            sprintf("ax should converge near 2; got %.3f", s.state.at(4, 0)));
+    }
+
+    gpsSmootherTests() {
+        # GpsSmoother with the same parameters as newConstantVelocity2D
+        # should produce identical posterior for the same observations.
+        float dt = 0.5;
+        float sigma_a = 1.5;
+        float sigma_meas = 2.0;
+        Qore::Kalman::LinearFilter gps = Qore::Kalman::newGpsSmoother(dt, sigma_a, sigma_meas);
+        Qore::Kalman::LinearFilter cv = Qore::Kalman::newConstantVelocity2D(dt, sigma_a, sigma_meas);
+
+        list<list<float>> obs = (
+            (0.5, 0.5), (1.1, 1.2), (1.7, 1.9), (2.2, 2.5), (2.8, 3.1),
+        );
+        foreach list<float> o in (obs) {
+            Qore::Kalman::Matrix z = Qore::Kalman::Matrix::fromColumn(o);
+            gps.predict(); gps.update(z);
+            cv.predict();  cv.update(z);
+        }
+        hash<KalmanFilterState> gps_s = gps.state();
+        hash<KalmanFilterState> cv_s = cv.state();
+        for (int i = 0; i < 4; ++i) {
+            assertTrue(abs(gps_s.state.at(i, 0) - cv_s.state.at(i, 0)) < 1e-12,
+                sprintf("state[%d] mismatch", i));
+        }
+    }
+
+    stepBatchTests() {
+        # Build two identical filters, run one with stepBatch and the
+        # other sequentially. Posterior must be identical.
+        Qore::Kalman::LinearFilter bat = Qore::Kalman::newGpsSmoother(0.1, 0.5, 1.0);
+        Qore::Kalman::LinearFilter seq = Qore::Kalman::newGpsSmoother(0.1, 0.5, 1.0);
+
+        list<Qore::Kalman::Matrix> obs = ();
+        for (int i = 0; i < 10; ++i) {
+            obs += Qore::Kalman::Matrix::fromColumn((float(i), float(i) * 0.5));
+        }
+
+        list<Qore::Kalman::Matrix> bat_states = bat.stepBatch(obs);
+        assertEq(10, bat_states.size());
+        foreach Qore::Kalman::Matrix obs_i in (obs) {
+            seq.predict();
+            seq.update(obs_i);
+        }
+
+        hash<KalmanFilterState> bat_s = bat.state();
+        hash<KalmanFilterState> seq_s = seq.state();
+        for (int i = 0; i < 4; ++i) {
+            assertTrue(abs(bat_s.state.at(i, 0) - seq_s.state.at(i, 0)) < 1e-12,
+                sprintf("state[%d] mismatch between stepBatch and sequential: "
+                    "bat=%.9f seq=%.9f",
+                    i, bat_s.state.at(i, 0), seq_s.state.at(i, 0)));
+        }
+
+        # stepBatch should have incremented both counters by N.
+        assertEq(10, bat_s.predict_count);
+        assertEq(10, bat_s.update_count);
+
+        # Last entry in stepBatch return should equal posterior state.
+        Qore::Kalman::Matrix last = bat_states[9];
+        for (int i = 0; i < 4; ++i) {
+            assertTrue(abs(last.at(i, 0) - bat_s.state.at(i, 0)) < 1e-12);
+        }
+    }
+
+    stepBatchNegativeTests() {
+        Qore::Kalman::LinearFilter kf = Qore::Kalman::newGpsSmoother(0.1, 0.5, 1.0);
+        # Non-Matrix element in the list.
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () {
+            kf.stepBatch(("not a matrix",));
+        });
+        # Wrong-shape observation (3x1 instead of 2x1).
+        assertThrows("KALMAN-DIMENSION-ERROR", sub () {
+            kf.stepBatch((Qore::Kalman::Matrix::fromColumn((1.0, 2.0, 3.0)),));
+        });
+    }
+
+    stepBatchEmptyTests() {
+        # Empty observation list returns empty result without affecting state.
+        Qore::Kalman::LinearFilter kf = Qore::Kalman::newGpsSmoother(0.1, 0.5, 1.0);
+        list<Qore::Kalman::Matrix> out = kf.stepBatch(());
+        assertEq(0, out.size());
+        hash<KalmanFilterState> s = kf.state();
+        assertEq(0, s.predict_count);
+        assertEq(0, s.update_count);
+    }
+}

@@ -30,6 +30,8 @@
 
 #include "kalman-module.h"
 
+#include <vector>
+
 // Standard linear Kalman filter (LKF).
 //
 // State vector x (state_size x 1), covariance P (state_size x state_size).
@@ -75,6 +77,14 @@ public:
     DLLLOCAL void predict(ExceptionSink* xsink);
     DLLLOCAL void predictWithControl(const Eigen::MatrixXd& u, ExceptionSink* xsink);
     DLLLOCAL void update(const Eigen::MatrixXd& z, ExceptionSink* xsink);
+
+    // Bulk step: one predict+update per observation in `observations`,
+    // returns the resulting state vectors (as Nx1 Eigen matrices) in a
+    // list. Halts at the first error — partial results are still
+    // returned in the out-parameter; caller can inspect size to see
+    // how many succeeded.
+    DLLLOCAL void stepBatch(const std::vector<Eigen::MatrixXd>& observations,
+            std::vector<Eigen::MatrixXd>& states_out, ExceptionSink* xsink);
 
 private:
     Eigen::Index n;     // state size

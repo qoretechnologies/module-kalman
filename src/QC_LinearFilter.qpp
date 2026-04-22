@@ -173,6 +173,19 @@ void QoreLinearFilter::update(const Eigen::MatrixXd& z, ExceptionSink* xsink) {
     ++update_count;
 }
 
+void QoreLinearFilter::stepBatch(const std::vector<Eigen::MatrixXd>& observations,
+        std::vector<Eigen::MatrixXd>& states_out, ExceptionSink* xsink) {
+    states_out.clear();
+    states_out.reserve(observations.size());
+    for (const auto& z : observations) {
+        predict(xsink);
+        if (*xsink) return;
+        update(z, xsink);
+        if (*xsink) return;
+        states_out.push_back(x);
+    }
+}
+
 // Helper: wrap an Eigen matrix in a Qore Matrix object.
 static QoreObject* wrapEigen(const Eigen::MatrixXd& e, ExceptionSink* xsink) {
     QoreObject* obj = new QoreObject(QC_MATRIX, getProgram());
@@ -321,6 +334,75 @@ nothing LinearFilter::predict() {
 */
 nothing LinearFilter::predict(Matrix[QoreMatrix] u) {
     kf->predictWithControl(u->get(), xsink);
+}
+
+//! Runs predict+update for a batch of observations in one call.
+/** Equivalent to calling @ref predict() / @ref update() alternately
+    for each element of @c observations, but the loop runs in C++
+    instead of Qore — cheaper than N round-trips through the language
+    boundary when you have a batch of fixes ready at once (e.g. backfill
+    of a historic track, hourly aggregation).
+
+    Halts on the first error; the returned list contains the states
+    for each successful step up to (not including) the error. For a
+    fully-successful call, the returned list has the same length as
+    @c observations.
+
+    @param observations list of observation vectors — each an @ref Matrix
+        of shape measurement_size × 1.
+
+    @return list of state-vector @ref Matrix objects, each state_size × 1,
+        one per successful (predict, update) pair.
+
+    @throw KALMAN-STATE-ERROR H / R / initial state not set yet.
+    @throw KALMAN-DIMENSION-ERROR an observation has the wrong shape.
+    @throw KALMAN-SINGULAR innovation covariance is singular on some step.
+
+    @par Example:
+    @code{.py}
+list<Qore::Kalman::Matrix> obs = (
+    Qore::Kalman::Matrix::fromColumn((1.0, 2.0)),
+    Qore::Kalman::Matrix::fromColumn((1.1, 2.1)),
+    Qore::Kalman::Matrix::fromColumn((1.2, 2.2)),
+);
+list<Qore::Kalman::Matrix> states = kf.stepBatch(obs);
+# states.size() == 3 on success; state[i] is the posterior after step i.
+    @endcode
+
+    @since kalman 1.1
+*/
+list<Matrix> LinearFilter::stepBatch(list<auto> observations) [flags=RET_VALUE_ONLY] {
+    std::vector<Eigen::MatrixXd> obs_in;
+    obs_in.reserve(observations->size());
+    for (size_t i = 0; i < observations->size(); ++i) {
+        QoreValue v = observations->retrieveEntry(i);
+        if (v.getType() != NT_OBJECT) {
+            xsink->raiseException("KALMAN-DIMENSION-ERROR",
+                "observations[%zu] must be a Matrix object; got %s",
+                i, v.getTypeName());
+            return QoreValue();
+        }
+        const QoreObject* obj = v.get<const QoreObject>();
+        SimpleRefHolder<QoreMatrix> mm(static_cast<QoreMatrix*>(
+            obj->getReferencedPrivateData(CID_MATRIX, xsink)));
+        if (*xsink) return QoreValue();
+        if (!mm) {
+            xsink->raiseException("KALMAN-DIMENSION-ERROR",
+                "observations[%zu] is not a Matrix", i);
+            return QoreValue();
+        }
+        obs_in.push_back(mm->get());
+    }
+    std::vector<Eigen::MatrixXd> states;
+    kf->stepBatch(obs_in, states, xsink);
+    if (*xsink) {
+        // Partial success: still return what succeeded.
+    }
+    ReferenceHolder<QoreListNode> out(new QoreListNode(QC_MATRIX->getTypeInfo()), xsink);
+    for (const auto& s : states) {
+        out->push(wrapEigen(s, xsink), xsink);
+    }
+    return out.release();
 }
 
 //! Runs the update step for one observation.

@@ -26,9 +26,39 @@
 */
 
 #include "kalman-module.h"
+#include "QC_LinearFilter.h"
+#include "QC_Matrix.h"
 
 #include <cstdlib>
 #include <cstring>
+
+namespace {
+
+// Build a Qore LinearFilter with the given Eigen matrices. Caller
+// guarantees shapes are valid (pre-baked factories control that).
+QoreValue buildLinearFilter(int state_size, int measurement_size,
+        const Eigen::MatrixXd& F, const Eigen::MatrixXd& H,
+        const Eigen::MatrixXd& Q, const Eigen::MatrixXd& R,
+        const Eigen::MatrixXd& x0, const Eigen::MatrixXd& P0,
+        ExceptionSink* xsink) {
+    ReferenceHolder<QoreLinearFilter> kf(
+        new QoreLinearFilter(state_size, measurement_size, 0), xsink);
+    kf->setF(F, xsink);
+    if (*xsink) return QoreValue();
+    kf->setH(H, xsink);
+    if (*xsink) return QoreValue();
+    kf->setQ(Q, xsink);
+    if (*xsink) return QoreValue();
+    kf->setR(R, xsink);
+    if (*xsink) return QoreValue();
+    kf->setState(x0, P0, xsink);
+    if (*xsink) return QoreValue();
+    QoreObject* obj = new QoreObject(QC_LINEARFILTER, getProgram());
+    obj->setPrivate(CID_LINEARFILTER, kf.release());
+    return obj;
+}
+
+}  // namespace
 
 //! Kalman module version info hash.
 /** Contains parsed version information for this module.
@@ -121,4 +151,166 @@ hash<KalmanVersionInfo> get_kalman_info() [flags=RET_VALUE_ONLY] {
     h->setKeyValue("patch", patch, xsink);
     return h.release();
 }
+
+//! Builds a pre-configured 2D constant-velocity @ref LinearFilter.
+/** State: @c [x, y, vx, vy]. Observation: @c [x_obs, y_obs]. The
+    returned filter has F, H, Q, R, and an initial state already set;
+    call @ref LinearFilter::predict() / @ref LinearFilter::update()
+    directly without additional setup.
+
+    Process noise matrix @c Q follows the standard CV-model form
+    derived from assuming a piecewise-constant white-noise acceleration
+    with standard deviation @c sigma_a per axis. Measurement noise is
+    isotropic: R = @c sigma_meas² · I.
+
+    Initial state is the origin with velocity zero; initial covariance
+    is large (100) on the diagonal so the first few observations carry
+    most of the weight.
+
+    @param dt timestep between observations, in the same units used by
+        @c sigma_a (typically seconds).
+    @param sigma_a process-noise acceleration standard deviation (m/s²).
+    @param sigma_meas measurement-noise position standard deviation (m).
+
+    @return a fully-configured @ref LinearFilter.
+
+    @par Example:
+    @code{.py}
+Qore::Kalman::LinearFilter kf = Qore::Kalman::newConstantVelocity2D(0.1, 0.5, 1.0);
+foreach list<float> obs in (observations) {
+    kf.predict();
+    kf.update(Qore::Kalman::Matrix::fromColumn(obs));
+}
+    @endcode
+*/
+LinearFilter newConstantVelocity2D(float dt, float sigma_a, float sigma_meas) [flags=RET_VALUE_ONLY] {
+    double dt2 = dt * dt;
+    double dt3 = dt2 * dt;
+    double dt4 = dt3 * dt;
+    double sa2 = sigma_a * sigma_a;
+    Eigen::MatrixXd F(4, 4);
+    F << 1, 0, dt, 0,
+         0, 1, 0, dt,
+         0, 0, 1, 0,
+         0, 0, 0, 1;
+    Eigen::MatrixXd H(2, 4);
+    H << 1, 0, 0, 0,
+         0, 1, 0, 0;
+    Eigen::MatrixXd Q(4, 4);
+    Q << dt4 / 4.0 * sa2, 0, dt3 / 2.0 * sa2, 0,
+         0, dt4 / 4.0 * sa2, 0, dt3 / 2.0 * sa2,
+         dt3 / 2.0 * sa2, 0, dt2 * sa2, 0,
+         0, dt3 / 2.0 * sa2, 0, dt2 * sa2;
+    Eigen::MatrixXd R(2, 2);
+    R << sigma_meas * sigma_meas, 0,
+         0, sigma_meas * sigma_meas;
+    Eigen::MatrixXd x0(4, 1);
+    x0 << 0, 0, 0, 0;
+    Eigen::MatrixXd P0 = Eigen::MatrixXd::Identity(4, 4) * 100.0;
+    return buildLinearFilter(4, 2, F, H, Q, R, x0, P0, xsink);
+}
+
+//! Builds a pre-configured 2D constant-acceleration @ref LinearFilter.
+/** State: @c [x, y, vx, vy, ax, ay]. Observation: @c [x_obs, y_obs].
+    Useful when the tracked object undergoes meaningful acceleration
+    phases — accelerating from a stop, braking, turning — and the
+    simpler constant-velocity model produces visibly lagging estimates.
+
+    Process noise follows the CA-model jerk-as-noise derivation with
+    standard deviation @c sigma_j (rate of change of acceleration).
+
+    @param dt timestep between observations.
+    @param sigma_j process-noise jerk standard deviation (m/s³).
+    @param sigma_meas measurement-noise position standard deviation (m).
+
+    @return a fully-configured @ref LinearFilter with state_size=6,
+        measurement_size=2.
+*/
+LinearFilter newConstantAcceleration2D(float dt, float sigma_j, float sigma_meas) [flags=RET_VALUE_ONLY] {
+    double dt2 = dt * dt;
+    double dt3 = dt2 * dt;
+    double dt4 = dt3 * dt;
+    double dt5 = dt4 * dt;
+    double dt6 = dt5 * dt;
+    double sj2 = sigma_j * sigma_j;
+    Eigen::MatrixXd F(6, 6);
+    F << 1, 0, dt, 0,  dt2 / 2.0, 0,
+         0, 1, 0,  dt, 0,         dt2 / 2.0,
+         0, 0, 1,  0,  dt,        0,
+         0, 0, 0,  1,  0,         dt,
+         0, 0, 0,  0,  1,         0,
+         0, 0, 0,  0,  0,         1;
+    Eigen::MatrixXd H(2, 6);
+    H << 1, 0, 0, 0, 0, 0,
+         0, 1, 0, 0, 0, 0;
+    Eigen::MatrixXd Q(6, 6);
+    // White-noise jerk model for CA: Q = G·Gᵀ · σ_j² with
+    // G = [dt³/6, 0, dt²/2, 0, dt, 0; 0, dt³/6, 0, dt²/2, 0, dt]ᵀ (per axis).
+    double a = dt6 / 36.0 * sj2;
+    double b = dt5 / 12.0 * sj2;
+    double c = dt4 / 6.0  * sj2;
+    double d = dt4 / 4.0  * sj2;
+    double e = dt3 / 2.0  * sj2;
+    double f = dt2        * sj2;
+    Q << a, 0, b, 0, c, 0,
+         0, a, 0, b, 0, c,
+         b, 0, d, 0, e, 0,
+         0, b, 0, d, 0, e,
+         c, 0, e, 0, f, 0,
+         0, c, 0, e, 0, f;
+    Eigen::MatrixXd R(2, 2);
+    R << sigma_meas * sigma_meas, 0,
+         0, sigma_meas * sigma_meas;
+    Eigen::MatrixXd x0(6, 1);
+    x0 << 0, 0, 0, 0, 0, 0;
+    Eigen::MatrixXd P0 = Eigen::MatrixXd::Identity(6, 6) * 100.0;
+    return buildLinearFilter(6, 2, F, H, Q, R, x0, P0, xsink);
+}
+
+//! Builds a pre-configured GPS-smoother @ref LinearFilter for noisy 2D position tracking.
+/** The "business use case" helper: 2D constant-velocity state
+    @c [x, y, vx, vy] with a measurement-noise matrix that scales
+    proportionally to HDOP (a user-supplied per-step HDOP proxy
+    would be applied per-update by constructing a custom R; this
+    factory sets the base R only, leaving the caller to update R via
+    @ref LinearFilter::setR() if HDOP varies per observation).
+
+    Equivalent to @ref newConstantVelocity2D but with process-noise
+    defaults tuned for GPS-smoothing scenarios (typical vehicle
+    acceleration standard deviation) and @c sigma_meas interpreted as
+    the *base* GPS CEP (around 2-5 m for typical consumer GPS).
+
+    @param dt timestep between GPS fixes.
+    @param sigma_a process-noise acceleration std dev — default 1.0 m/s²
+        fits vehicle driving. Use 0.2 for pedestrian, 3.0 for aggressive
+        cornering / motorcycle.
+    @param sigma_gps_base base GPS measurement-noise std dev (m) when
+        HDOP = 1. Real per-fix σ = sigma_gps_base * HDOP; the caller
+        uses @c setR() to scale when HDOP is known.
+
+    @return a fully-configured 2D-CV @ref LinearFilter tuned for GPS.
+*/
+LinearFilter newGpsSmoother(float dt, float sigma_a, float sigma_gps_base) [flags=RET_VALUE_ONLY] {
+    double dt2 = dt * dt;
+    double dt3 = dt2 * dt;
+    double dt4 = dt3 * dt;
+    double sa2 = sigma_a * sigma_a;
+    Eigen::MatrixXd F(4, 4);
+    F << 1, 0, dt, 0, 0, 1, 0, dt, 0, 0, 1, 0, 0, 0, 0, 1;
+    Eigen::MatrixXd H(2, 4);
+    H << 1, 0, 0, 0, 0, 1, 0, 0;
+    Eigen::MatrixXd Q(4, 4);
+    Q << dt4 / 4.0 * sa2, 0, dt3 / 2.0 * sa2, 0,
+         0, dt4 / 4.0 * sa2, 0, dt3 / 2.0 * sa2,
+         dt3 / 2.0 * sa2, 0, dt2 * sa2, 0,
+         0, dt3 / 2.0 * sa2, 0, dt2 * sa2;
+    Eigen::MatrixXd R(2, 2);
+    R << sigma_gps_base * sigma_gps_base, 0,
+         0, sigma_gps_base * sigma_gps_base;
+    Eigen::MatrixXd x0(4, 1);
+    x0 << 0, 0, 0, 0;
+    Eigen::MatrixXd P0 = Eigen::MatrixXd::Identity(4, 4) * 100.0;
+    return buildLinearFilter(4, 2, F, H, Q, R, x0, P0, xsink);
+}
+
 ///@}

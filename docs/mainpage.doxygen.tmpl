@@ -42,6 +42,19 @@
     - @ref Qore::Kalman::get_kalman_info() "get_kalman_info()" —
       structured version info.
 
+    Pre-baked model factories (1.1+):
+    - @ref Qore::Kalman::newConstantVelocity2D()
+      "newConstantVelocity2D()" — one-call 2D CV filter (state:
+      @c [x, y, vx, vy]).
+    - @ref Qore::Kalman::newConstantAcceleration2D()
+      "newConstantAcceleration2D()" — one-call 2D CA filter
+      (state: @c [x, y, vx, vy, ax, ay]).
+    - @ref Qore::Kalman::newGpsSmoother() "newGpsSmoother()" — 2D CV
+      tuned for GPS smoothing, with @c sigma_gps_base parameterising
+      the measurement noise floor. Our canonical business-use-case
+      helper; replaces ~300 lines of hand-rolled scalar matrix
+      arithmetic with a single call.
+
     @section kalmanthread Thread safety
 
     @ref Qore::Kalman::Matrix "Matrix" is immutable after construction
@@ -118,6 +131,23 @@ hash<KalmanFilterState> final = kf.state();
     @endcode
 
     @section kalmanrelease kalman Module Release History
+
+    @subsection kalman_1_1 kalman Module Version 1.1
+    - Pre-baked model factories for common tracking cases:
+      @ref Qore::Kalman::newConstantVelocity2D()
+      "newConstantVelocity2D()", @ref
+      Qore::Kalman::newConstantAcceleration2D()
+      "newConstantAcceleration2D()", and
+      @ref Qore::Kalman::newGpsSmoother() "newGpsSmoother()". Each
+      returns a fully-configured @ref Qore::Kalman::LinearFilter
+      "LinearFilter" ready to step — no manual F / H / Q / R
+      construction needed for the 90% case.
+    - @ref Qore::Kalman::LinearFilter::stepBatch()
+      "LinearFilter::stepBatch()" — bulk predict+update across an
+      observation list in one call, cheaper than N Qore round-trips.
+    - Release notes: UKF (unscented Kalman filter) and filter-state
+      serialization are planned for 1.2. 1.1 focuses on the business-
+      use-case helpers and the batch step operation.
 
     @subsection kalman_1_0 kalman Module Version 1.0
     - initial public release
