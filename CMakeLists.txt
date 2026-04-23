@@ -18,8 +18,20 @@ find_package(Qore 0.9 REQUIRED)
 find_package(Eigen3 3.3 CONFIG QUIET)
 if(Eigen3_FOUND AND TARGET Eigen3::Eigen)
     message(STATUS "Found Eigen3 via CMake config: ${Eigen3_VERSION}")
+    # Debian / Ubuntu ship a libeigen3-dev whose Eigen3Config.cmake does
+    # NOT set INTERFACE_INCLUDE_DIRECTORIES on the imported target, so
+    # `target_link_libraries(… Eigen3::Eigen)` alone leaves Eigen/Dense
+    # off the compile include path. Read the property directly and apply
+    # it globally — unsets harmlessly when the target is fully populated.
+    get_target_property(_eigen_inc Eigen3::Eigen INTERFACE_INCLUDE_DIRECTORIES)
+    if(_eigen_inc)
+        include_directories(${_eigen_inc})
+    elseif(EIGEN3_INCLUDE_DIR)
+        include_directories(${EIGEN3_INCLUDE_DIR})
+    endif()
 else()
     find_package(Eigen3 REQUIRED)
+    include_directories(${EIGEN3_INCLUDE_DIR})
 endif()
 
 # ensure qdx can find the kalman binary module and user modules when processing .qc files
