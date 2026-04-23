@@ -1,0 +1,103 @@
+# Valgrind suppressions for known false positives from optimized libqore
+# builds. These are uninitialized value reads caused by compiler
+# optimizations in release builds - not actual bugs.
+#
+# module-kalman uses Eigen, which is header-only and has no dynamic
+# library at runtime — its code compiles directly into the module and
+# any real issue would surface as a genuine error, not a false positive.
+# So this file only needs the libqore patterns.
+
+# --- libqore false positives (optimized build) ---
+
+{
+   qore-value-set-uninit
+   Memcheck:Cond
+   fun:*QoreValue*set*
+}
+
+{
+   qore-value-gettype-uninit
+   Memcheck:Cond
+   fun:*QoreValue*getType*
+}
+
+{
+   qore-value-assign-uninit
+   Memcheck:Cond
+   fun:*QoreValue*assign*
+}
+
+{
+   qore-value-deref-uninit
+   Memcheck:Cond
+   fun:*QoreValue*deref*
+}
+
+{
+   qore-value-discard-uninit
+   Memcheck:Cond
+   fun:*QoreValue*discard*
+}
+
+{
+   qore-value-isnothing-uninit
+   Memcheck:Cond
+   fun:*QoreValue*isNothing*
+}
+
+{
+   qore-value-isnull-uninit
+   Memcheck:Cond
+   fun:*QoreValue*isNull*
+}
+
+{
+   qore-parser-yyparse-uninit
+   Memcheck:Cond
+   fun:*yyparse*
+}
+
+{
+   qore-parser-process-assignment-uninit
+   Memcheck:Cond
+   fun:*process_assignment*
+}
+
+{
+   qore-parser-splice-expressions-uninit
+   Memcheck:Cond
+   fun:*splice_expressions*
+}
+
+{
+   qore-init-math-uninit
+   Memcheck:Cond
+   ...
+   fun:*init_math_constants*
+}
+
+{
+   qore-static-system-ns-uninit
+   Memcheck:Cond
+   ...
+   fun:*StaticSystemNamespace*
+}
+
+{
+   qore-constant-clear-uninit
+   Memcheck:Cond
+   ...
+   fun:*ConstantList*clear*
+}
+
+{
+   qore-qorevalue-cond-generic
+   Memcheck:Cond
+   obj:*/libqore.so*
+}
+
+{
+   qore-qorevalue-value-generic
+   Memcheck:Value8
+   obj:*/libqore.so*
+}

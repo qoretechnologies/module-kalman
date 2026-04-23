@@ -25,7 +25,7 @@ echo "export QORE_GID=1000" >> ${ENV_FILE}
 
 export MAKE_JOBS=4
 
-# install GEOS development library
+# install Eigen development headers (Eigen is header-only)
 apk add --no-cache eigen-dev
 
 # build module and install

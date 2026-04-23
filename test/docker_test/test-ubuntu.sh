@@ -25,7 +25,7 @@ echo "export QORE_GID=999" >> ${ENV_FILE}
 
 export MAKE_JOBS=4
 
-# install GEOS development library
+# install Eigen development headers (Eigen is header-only)
 apt-get update
 apt-get install -y libeigen3-dev valgrind
 
@@ -52,5 +52,5 @@ done
 
 # run valgrind
 for test in test/*.qtest; do
-    gosu qore:qore valgrind --error-exitcode=1 --leak-check=full --suppressions=${MODULE_SRC_DIR}/test/geos.supp qore -b --enable-debug $test -vv
+    gosu qore:qore valgrind --error-exitcode=1 --leak-check=full --suppressions=${MODULE_SRC_DIR}/test/kalman.supp qore -b --enable-debug $test -vv
 done
