@@ -13,14 +13,13 @@ find_package(Qore 0.9 REQUIRED)
 
 # Eigen's upstream ships its own CMake config (Eigen3Config.cmake). Prefer
 # it when present; fall back to our FindEigen3.cmake for older systems
-# or pkg-config-only setups. Eigen is header-only — no link step.
+# or pkg-config-only setups. Eigen is header-only — the include dir is
+# attached to the kalman target after add_library() below.
 find_package(Eigen3 3.3 CONFIG QUIET)
 if(Eigen3_FOUND AND TARGET Eigen3::Eigen)
-    set(EIGEN3_INCLUDE_DIR ${EIGEN3_INCLUDE_DIR})
     message(STATUS "Found Eigen3 via CMake config: ${Eigen3_VERSION}")
 else()
     find_package(Eigen3 REQUIRED)
-    include_directories(${EIGEN3_INCLUDE_DIR})
 endif()
 
 # ensure qdx can find the kalman binary module and user modules when processing .qc files
@@ -58,6 +57,12 @@ set(QORE_DOX_TMPL_SRC
 )
 
 add_library(${module_name} MODULE ${CPP_SRC} ${QPP_SOURCES})
+
+if(TARGET Eigen3::Eigen)
+    target_link_libraries(${module_name} PRIVATE Eigen3::Eigen)
+else()
+    target_include_directories(${module_name} PRIVATE ${EIGEN3_INCLUDE_DIR})
+endif()
 
 if(WIN32 AND MINGW AND MSYS)
     target_compile_definitions(${module_name} PUBLIC BUILDING_DLL)
