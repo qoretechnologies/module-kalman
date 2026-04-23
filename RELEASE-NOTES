@@ -1,2 +1,29 @@
-See the Qore kalman module doxygen documentation for release notes:
-docs/mainpage.doxygen.tmpl (source) or the generated HTML documentation.
+Qore kalman Module Release Notes
+================================
+
+1.1
+---
+- Pre-baked model factories for common tracking cases: newConstantVelocity2D(),
+  newConstantAcceleration2D(), newGpsSmoother(). Each returns a fully-configured
+  LinearFilter ready to step — no manual F / H / Q / R construction needed for
+  the 90% case.
+- LinearFilter::stepBatch() — bulk predict+update across an observation list in
+  one call, cheaper than N Qore round-trips. Checks for cooperative cancellation
+  between iterations so long batches remain killable via cancel_thread() or
+  SandboxManager::requestInterrupt().
+
+1.0
+---
+- Initial public release.
+- Matrix primitive (Eigen-backed) with arithmetic, transpose, inverse,
+  cholesky, determinant. Immutable — every op returns a new Matrix.
+- LinearFilter — standard linear Kalman filter (LKF).
+- ExtendedFilter — extended Kalman filter (EKF); non-linear state-transition
+  and observation functions supplied as Qore callbacks that also return the
+  Jacobian.
+- Joseph-form covariance update for numerical stability under accumulated
+  floating-point error.
+- Module version helpers: kalman_version(), get_kalman_info().
+
+See the doxygen documentation (docs/release-notes.doxygen.tmpl, or the
+generated HTML) for the in-tree canonical release notes.

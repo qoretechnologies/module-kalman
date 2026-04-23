@@ -177,7 +177,19 @@ void QoreLinearFilter::stepBatch(const std::vector<Eigen::MatrixXd>& observation
         std::vector<Eigen::MatrixXd>& states_out, ExceptionSink* xsink) {
     states_out.clear();
     states_out.reserve(observations.size());
+    // Pattern-1 pre-check: bail before the first predict if a cancel /
+    // interrupt is already pending from an earlier operation on this thread.
+    if (qore_check_cancel(xsink, "Kalman::LinearFilter::stepBatch")) {
+        return;
+    }
     for (const auto& z : observations) {
+        // Pattern-5 per-iteration check: batches of thousands of observations
+        // (historic backfills, hourly aggregations) must stay killable via
+        // cancel_thread() / SandboxManager::requestInterrupt(). One atomic
+        // load per iteration — negligible vs. the predict+update cost.
+        if (qore_check_cancel(xsink, "Kalman::LinearFilter::stepBatch")) {
+            return;
+        }
         predict(xsink);
         if (*xsink) return;
         update(z, xsink);

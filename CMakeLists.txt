@@ -54,6 +54,7 @@ set(module_name "kalman")
 
 set(QORE_DOX_TMPL_SRC
     docs/mainpage.doxygen.tmpl
+    docs/release-notes.doxygen.tmpl
 )
 
 add_library(${module_name} MODULE ${CPP_SRC} ${QPP_SOURCES})

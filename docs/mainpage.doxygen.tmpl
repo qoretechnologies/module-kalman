@@ -130,32 +130,5 @@ hash<KalmanFilterState> final = kf.state();
 # final.state is the 4x1 smoothed state, final.covariance is the 4x4 P matrix
     @endcode
 
-    @section kalmanrelease kalman Module Release History
-
-    @subsection kalman_1_1 kalman Module Version 1.1
-    - Pre-baked model factories for common tracking cases:
-      @ref Qore::Kalman::newConstantVelocity2D()
-      "newConstantVelocity2D()", @ref
-      Qore::Kalman::newConstantAcceleration2D()
-      "newConstantAcceleration2D()", and
-      @ref Qore::Kalman::newGpsSmoother() "newGpsSmoother()". Each
-      returns a fully-configured @ref Qore::Kalman::LinearFilter
-      "LinearFilter" ready to step — no manual F / H / Q / R
-      construction needed for the 90% case.
-    - @ref Qore::Kalman::LinearFilter::stepBatch()
-      "LinearFilter::stepBatch()" — bulk predict+update across an
-      observation list in one call, cheaper than N Qore round-trips.
-    - Release notes: UKF (unscented Kalman filter) and filter-state
-      serialization are planned for 1.2. 1.1 focuses on the business-
-      use-case helpers and the batch step operation.
-
-    @subsection kalman_1_0 kalman Module Version 1.0
-    - initial public release
-    - @ref Qore::Kalman::Matrix "Matrix" primitive with arithmetic,
-      transpose, inverse, cholesky, determinant
-    - @ref Qore::Kalman::LinearFilter "LinearFilter" (standard KF)
-    - @ref Qore::Kalman::ExtendedFilter "ExtendedFilter" (EKF via
-      Qore Jacobian callbacks)
-    - Joseph-form covariance update for numerical stability
-    - module version helpers
+    See @ref kalmanrelease for the release history.
 */
