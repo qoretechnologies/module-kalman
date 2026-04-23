@@ -327,6 +327,11 @@ Matrix Matrix::inverse() [flags=RET_VALUE_ONLY] {
             (long long)m->rows(), (long long)m->cols());
         return QoreValue();
     }
+    // Large matrices make this O(n^3); honour cooperative cancellation
+    // before starting the decomposition.
+    if (qore_check_cancel(xsink, "Kalman::Matrix::inverse")) {
+        return QoreValue();
+    }
     // Use FullPivLU so we can detect non-invertibility cleanly.
     Eigen::FullPivLU<Eigen::MatrixXd> lu(m->get());
     if (!lu.isInvertible()) {
@@ -376,6 +381,10 @@ Matrix Matrix::cholesky() [flags=RET_VALUE_ONLY] {
         xsink->raiseException("KALMAN-DIMENSION-ERROR",
             "cholesky undefined for non-square %lldx%lld matrix",
             (long long)m->rows(), (long long)m->cols());
+        return QoreValue();
+    }
+    // O(n^3) decomposition; allow cooperative cancellation on large inputs.
+    if (qore_check_cancel(xsink, "Kalman::Matrix::cholesky")) {
         return QoreValue();
     }
     Eigen::LLT<Eigen::MatrixXd> llt(m->get());

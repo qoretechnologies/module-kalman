@@ -2,9 +2,9 @@
 
 ## Module Information
 - **Name**: kalman
-- **Version**: 1.0
+- **Version**: 1.1
 - **Type**: C++ (binary module)
-- **Audit Date**: 2026-04-22
+- **Audit Date**: 2026-04-23
 - **Safe for Sandbox Use**: Yes
 
 ## Domain
@@ -54,18 +54,17 @@
 ## Interrupt Support / Cooperative Cancellation
 - [x] All per-step filter operations (`predict`, `update`) complete in
       microseconds on typical state sizes (≤10) — no polling needed
-- [x] `Matrix::inverse()` / `Matrix::cholesky()` are bounded by O(n³)
-      on matrix order n; for small matrices (n ≤ ~100) they complete
-      in microseconds and need no cancellation polling
-- **Gaps Found**: For very large matrices (n ≥ ~1000), Eigen's LU /
-      Cholesky decompositions can run for seconds. A `qore_check_cancel()`
-      call before each heavy decomposition would enable cooperative
-      cancellation on those paths, matching Pattern 2 from the
-      cooperative-cancellation design document. Not yet implemented in
-      1.0 because typical use is with state dimensions 1-10.
-- **Severity**: Low (only relevant for atypical very-large-matrix usage)
-- **Planned follow-up**: add `qore_check_cancel()` call at the head of
-  `Matrix::inverse()` and `Matrix::cholesky()` in 1.1.
+- [x] `LinearFilter::stepBatch()` uses Pattern-1 (pre-check) and
+      Pattern-5 (per-iteration) cancellation so long observation
+      batches remain killable via `cancel_thread()` or
+      `SandboxManager::requestInterrupt()`.
+- [x] `Matrix::inverse()` and `Matrix::cholesky()` call
+      `qore_check_cancel()` at the head of each method (Pattern 1),
+      so very-large-matrix decompositions are cooperatively
+      cancellable even though the underlying Eigen call itself is
+      not interruptible.
+- **Gaps Found**: None in currently-shipped entry points.
+- **Severity**: None
 
 ## Thread Safety Disclosure
 - **Matrix**: fully immutable after construction; safe to share across
@@ -96,15 +95,14 @@ state-transition and observation functions. Security considerations:
 - **Severity**: None
 
 ## Summary
-- **Compliance Level**: Full (with one low-severity follow-up noted
-  for 1.1 — cancellation hooks in very-large-matrix decomposition paths)
-- **Highest Severity Finding**: Low
+- **Compliance Level**: Full
+- **Highest Severity Finding**: None
 - **Recommendation**: Safe to use in sandbox environments. The module
   is computation-only, dependency is a single header-only library
   (Eigen), and there are no I/O or external-resource code paths.
 
 ## Specific Findings
 
-No security-critical findings. The one tracked follow-up —
-cancellation-check calls in `Matrix::inverse()` /
-`Matrix::cholesky()` — is an enhancement, not a vulnerability.
+No security-critical findings. The 1.0 follow-up (add
+`qore_check_cancel()` to `Matrix::inverse()` / `Matrix::cholesky()`)
+was closed in 1.1.
