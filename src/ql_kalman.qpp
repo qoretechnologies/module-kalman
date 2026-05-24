@@ -183,7 +183,7 @@ foreach list<float> obs in (observations) {
 }
     @endcode
 */
-LinearFilter newConstantVelocity2D(float dt, float sigma_a, float sigma_meas) [flags=RET_VALUE_ONLY] {
+LinearFilter newConstantVelocity2D(float dt, float sigma_a, float sigma_meas) [flags=RET_VALUE_ONLY,NAMED_ARGS] {
     double dt2 = dt * dt;
     double dt3 = dt2 * dt;
     double dt4 = dt3 * dt;
@@ -226,7 +226,7 @@ LinearFilter newConstantVelocity2D(float dt, float sigma_a, float sigma_meas) [f
     @return a fully-configured @ref LinearFilter with state_size=6,
         measurement_size=2.
 */
-LinearFilter newConstantAcceleration2D(float dt, float sigma_j, float sigma_meas) [flags=RET_VALUE_ONLY] {
+LinearFilter newConstantAcceleration2D(float dt, float sigma_j, float sigma_meas) [flags=RET_VALUE_ONLY,NAMED_ARGS] {
     double dt2 = dt * dt;
     double dt3 = dt2 * dt;
     double dt4 = dt3 * dt;
@@ -290,7 +290,7 @@ LinearFilter newConstantAcceleration2D(float dt, float sigma_j, float sigma_meas
 
     @return a fully-configured 2D-CV @ref LinearFilter tuned for GPS.
 */
-LinearFilter newGpsSmoother(float dt, float sigma_a, float sigma_gps_base) [flags=RET_VALUE_ONLY] {
+LinearFilter newGpsSmoother(float dt, float sigma_a, float sigma_gps_base) [flags=RET_VALUE_ONLY,NAMED_ARGS] {
     double dt2 = dt * dt;
     double dt3 = dt2 * dt;
     double dt4 = dt3 * dt;
