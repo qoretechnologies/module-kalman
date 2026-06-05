@@ -253,7 +253,7 @@ qclass LinearFilter [arg=QoreLinearFilter* kf; ns=Qore::Kalman];
     @throw KALMAN-DIMENSION-ERROR state_size or measurement_size is
         non-positive, or control_size is negative.
 */
-LinearFilter::constructor(hash<LinearFilterOptions> options) {
+LinearFilter::constructor(hash<LinearFilterOptions> options) [flags=NAMED_ARGS] {
     int state_size = (int)options->getKeyValue("state_size").getAsBigInt();
     int measurement_size = (int)options->getKeyValue("measurement_size").getAsBigInt();
     QoreValue cv = options->getKeyValue("control_size");
@@ -281,7 +281,7 @@ LinearFilter::constructor(hash<LinearFilterOptions> options) {
 /** @param F @ref Matrix of shape state_size × state_size.
     @throw KALMAN-DIMENSION-ERROR F has the wrong shape.
 */
-nothing LinearFilter::setF(Matrix[QoreMatrix] F) {
+nothing LinearFilter::setF(Matrix[QoreMatrix] F) [flags=NAMED_ARGS] {
     kf->setF(F->get(), xsink);
 }
 
@@ -289,7 +289,7 @@ nothing LinearFilter::setF(Matrix[QoreMatrix] F) {
 /** @param H @ref Matrix of shape measurement_size × state_size.
     @throw KALMAN-DIMENSION-ERROR H has the wrong shape.
 */
-nothing LinearFilter::setH(Matrix[QoreMatrix] H) {
+nothing LinearFilter::setH(Matrix[QoreMatrix] H) [flags=NAMED_ARGS] {
     kf->setH(H->get(), xsink);
 }
 
@@ -297,7 +297,7 @@ nothing LinearFilter::setH(Matrix[QoreMatrix] H) {
 /** @param Q @ref Matrix of shape state_size × state_size.
     @throw KALMAN-DIMENSION-ERROR Q has the wrong shape.
 */
-nothing LinearFilter::setQ(Matrix[QoreMatrix] Q) {
+nothing LinearFilter::setQ(Matrix[QoreMatrix] Q) [flags=NAMED_ARGS] {
     kf->setQ(Q->get(), xsink);
 }
 
@@ -305,7 +305,7 @@ nothing LinearFilter::setQ(Matrix[QoreMatrix] Q) {
 /** @param R @ref Matrix of shape measurement_size × measurement_size.
     @throw KALMAN-DIMENSION-ERROR R has the wrong shape.
 */
-nothing LinearFilter::setR(Matrix[QoreMatrix] R) {
+nothing LinearFilter::setR(Matrix[QoreMatrix] R) [flags=NAMED_ARGS] {
     kf->setR(R->get(), xsink);
 }
 
@@ -314,7 +314,7 @@ nothing LinearFilter::setR(Matrix[QoreMatrix] R) {
     @throw KALMAN-STATE-ERROR filter has no control input.
     @throw KALMAN-DIMENSION-ERROR B has the wrong shape.
 */
-nothing LinearFilter::setB(Matrix[QoreMatrix] B) {
+nothing LinearFilter::setB(Matrix[QoreMatrix] B) [flags=NAMED_ARGS] {
     kf->setB(B->get(), xsink);
 }
 
@@ -323,7 +323,7 @@ nothing LinearFilter::setB(Matrix[QoreMatrix] B) {
     @param P_init covariance, @ref Matrix of shape state_size × state_size.
     @throw KALMAN-DIMENSION-ERROR shapes don't match filter dimensions.
 */
-nothing LinearFilter::setState(Matrix[QoreMatrix] x_init, Matrix[QoreMatrix] P_init) {
+nothing LinearFilter::setState(Matrix[QoreMatrix] x_init, Matrix[QoreMatrix] P_init) [flags=NAMED_ARGS] {
     kf->setState(x_init->get(), P_init->get(), xsink);
 }
 
@@ -344,7 +344,7 @@ nothing LinearFilter::predict() {
         matrices not set.
     @throw KALMAN-DIMENSION-ERROR u has the wrong shape.
 */
-nothing LinearFilter::predict(Matrix[QoreMatrix] u) {
+nothing LinearFilter::predict(Matrix[QoreMatrix] u) [flags=NAMED_ARGS] {
     kf->predictWithControl(u->get(), xsink);
 }
 
@@ -383,10 +383,13 @@ list<Qore::Kalman::Matrix> states = kf.stepBatch(obs);
 
     @since kalman 1.1
 */
-list<Matrix> LinearFilter::stepBatch(list<auto> observations) [flags=RET_VALUE_ONLY] {
+list<Matrix> LinearFilter::stepBatch(list<auto> observations) [flags=RET_VALUE_ONLY,NAMED_ARGS] {
     std::vector<Eigen::MatrixXd> obs_in;
     obs_in.reserve(observations->size());
     for (size_t i = 0; i < observations->size(); ++i) {
+        if (i && !(i % 100) && qore_check_cancel(xsink, "Kalman::LinearFilter::stepBatch")) {
+            return QoreValue();
+        }
         QoreValue v = observations->retrieveEntry(i);
         if (v.getType() != NT_OBJECT) {
             xsink->raiseException("KALMAN-DIMENSION-ERROR",
@@ -411,8 +414,13 @@ list<Matrix> LinearFilter::stepBatch(list<auto> observations) [flags=RET_VALUE_O
         // Partial success: still return what succeeded.
     }
     ReferenceHolder<QoreListNode> out(new QoreListNode(QC_MATRIX->getTypeInfo()), xsink);
+    size_t i = 0;
     for (const auto& s : states) {
+        if (i && !(i % 100) && qore_check_cancel(xsink, "Kalman::LinearFilter::stepBatch")) {
+            return QoreValue();
+        }
         out->push(wrapEigen(s, xsink), xsink);
+        ++i;
     }
     return out.release();
 }
@@ -427,7 +435,7 @@ list<Matrix> LinearFilter::stepBatch(list<auto> observations) [flags=RET_VALUE_O
     @throw KALMAN-DIMENSION-ERROR z has the wrong shape.
     @throw KALMAN-SINGULAR innovation covariance is singular.
 */
-nothing LinearFilter::update(Matrix[QoreMatrix] z) {
+nothing LinearFilter::update(Matrix[QoreMatrix] z) [flags=NAMED_ARGS] {
     kf->update(z->get(), xsink);
 }
 

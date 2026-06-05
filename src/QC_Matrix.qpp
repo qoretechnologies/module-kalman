@@ -45,6 +45,9 @@ QoreMatrix* QoreMatrix::fromRows(const QoreListNode* rows, ExceptionSink* xsink)
 
     Eigen::MatrixXd m(static_cast<Eigen::Index>(n_rows), static_cast<Eigen::Index>(n_cols));
     for (size_t i = 0; i < n_rows; ++i) {
+        if (i && !(i % 100) && qore_check_cancel(xsink, "Kalman::Matrix::fromRows")) {
+            return nullptr;
+        }
         QoreValue rv = rows->retrieveEntry(i);
         if (rv.getType() != NT_LIST) {
             xsink->raiseException("KALMAN-MATRIX-ERROR",
@@ -59,6 +62,9 @@ QoreMatrix* QoreMatrix::fromRows(const QoreListNode* rows, ExceptionSink* xsink)
             return nullptr;
         }
         for (size_t j = 0; j < n_cols; ++j) {
+            if (j && !(j % 100) && qore_check_cancel(xsink, "Kalman::Matrix::fromRows")) {
+                return nullptr;
+            }
             m(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) =
                 r->retrieveEntry(j).getAsFloat();
         }
@@ -67,10 +73,12 @@ QoreMatrix* QoreMatrix::fromRows(const QoreListNode* rows, ExceptionSink* xsink)
 }
 
 QoreMatrix* QoreMatrix::fromColumn(const QoreListNode* col, ExceptionSink* xsink) {
-    (void)xsink;
     size_t n = col->size();
     Eigen::MatrixXd m(static_cast<Eigen::Index>(n), 1);
     for (size_t i = 0; i < n; ++i) {
+        if (i && !(i % 100) && qore_check_cancel(xsink, "Kalman::Matrix::fromColumn")) {
+            return nullptr;
+        }
         m(static_cast<Eigen::Index>(i), 0) = col->retrieveEntry(i).getAsFloat();
     }
     return new QoreMatrix(std::move(m));
@@ -150,7 +158,7 @@ Qore::Kalman::Matrix m = Qore::Kalman::Matrix::fromRows((
 ));
     @endcode
 */
-static Matrix Matrix::fromRows(list<auto> rows) {
+static Matrix Matrix::fromRows(list<auto> rows) [flags=NAMED_ARGS] {
     QoreMatrix* m = QoreMatrix::fromRows(rows, xsink);
     return wrapMatrix(m, xsink);
 }
@@ -164,7 +172,7 @@ static Matrix Matrix::fromRows(list<auto> rows) {
 Qore::Kalman::Matrix v = Qore::Kalman::Matrix::fromColumn((1.0, 2.0, 3.0));
     @endcode
 */
-static Matrix Matrix::fromColumn(list<auto> col) {
+static Matrix Matrix::fromColumn(list<auto> col) [flags=NAMED_ARGS] {
     QoreMatrix* m = QoreMatrix::fromColumn(col, xsink);
     return wrapMatrix(m, xsink);
 }
@@ -176,7 +184,7 @@ static Matrix Matrix::fromColumn(list<auto> col) {
 
     @throw KALMAN-DIMENSION-ERROR either dimension is negative.
 */
-static Matrix Matrix::zeros(int rows, int cols) {
+static Matrix Matrix::zeros(int rows, int cols) [flags=NAMED_ARGS] {
     QoreMatrix* m = QoreMatrix::zeros(rows, cols, xsink);
     return wrapMatrix(m, xsink);
 }
@@ -187,7 +195,7 @@ static Matrix Matrix::zeros(int rows, int cols) {
 
     @throw KALMAN-DIMENSION-ERROR n is negative.
 */
-static Matrix Matrix::identity(int n) {
+static Matrix Matrix::identity(int n) [flags=NAMED_ARGS] {
     QoreMatrix* m = QoreMatrix::identity(n, xsink);
     return wrapMatrix(m, xsink);
 }
@@ -223,7 +231,7 @@ list<int> Matrix::shape() [flags=CONSTANT] {
 
     @throw KALMAN-INDEX-ERROR index out of range.
 */
-float Matrix::at(int row, int col) [flags=RET_VALUE_ONLY] {
+float Matrix::at(int row, int col) [flags=RET_VALUE_ONLY,NAMED_ARGS] {
     if (row < 0 || row >= m->rows() || col < 0 || col >= m->cols()) {
         xsink->raiseException("KALMAN-INDEX-ERROR",
             "index (%lld, %lld) out of range for %lldx%lld matrix",
@@ -238,12 +246,18 @@ float Matrix::at(int row, int col) [flags=RET_VALUE_ONLY] {
 /** @return a list of row lists; each row is a list of floats with
     length equal to numCols().
 */
-list<list<float>> Matrix::toRows() [flags=CONSTANT] {
+list<list<float>> Matrix::toRows() [flags=RET_VALUE_ONLY] {
     const Eigen::MatrixXd& e = m->get();
     ReferenceHolder<QoreListNode> out(new QoreListNode(listTypeInfo), xsink);
     for (Eigen::Index i = 0; i < e.rows(); ++i) {
+        if (i && !(i % 100) && qore_check_cancel(xsink, "Kalman::Matrix::toRows")) {
+            return QoreValue();
+        }
         ReferenceHolder<QoreListNode> row(new QoreListNode(floatTypeInfo), xsink);
         for (Eigen::Index j = 0; j < e.cols(); ++j) {
+            if (j && !(j % 100) && qore_check_cancel(xsink, "Kalman::Matrix::toRows")) {
+                return QoreValue();
+            }
             row->push(e(i, j), xsink);
         }
         out->push(row.release(), xsink);
@@ -255,7 +269,7 @@ list<list<float>> Matrix::toRows() [flags=CONSTANT] {
 /** @param other a @ref Matrix with the same shape.
     @throw KALMAN-DIMENSION-ERROR shapes do not match.
 */
-Matrix Matrix::add(Matrix[QoreMatrix] other) [flags=RET_VALUE_ONLY] {
+Matrix Matrix::add(Matrix[QoreMatrix] other) [flags=RET_VALUE_ONLY,NAMED_ARGS] {
     if (m->rows() != other->rows() || m->cols() != other->cols()) {
         xsink->raiseException("KALMAN-DIMENSION-ERROR",
             "cannot add %lldx%lld to %lldx%lld",
@@ -270,7 +284,7 @@ Matrix Matrix::add(Matrix[QoreMatrix] other) [flags=RET_VALUE_ONLY] {
 /** @param other a @ref Matrix with the same shape.
     @throw KALMAN-DIMENSION-ERROR shapes do not match.
 */
-Matrix Matrix::sub(Matrix[QoreMatrix] other) [flags=RET_VALUE_ONLY] {
+Matrix Matrix::sub(Matrix[QoreMatrix] other) [flags=RET_VALUE_ONLY,NAMED_ARGS] {
     if (m->rows() != other->rows() || m->cols() != other->cols()) {
         xsink->raiseException("KALMAN-DIMENSION-ERROR",
             "cannot subtract %lldx%lld from %lldx%lld",
@@ -288,7 +302,7 @@ Matrix Matrix::sub(Matrix[QoreMatrix] other) [flags=RET_VALUE_ONLY] {
 
     @throw KALMAN-DIMENSION-ERROR matrix dimensions don't chain.
 */
-Matrix Matrix::mul(Matrix[QoreMatrix] other) [flags=RET_VALUE_ONLY] {
+Matrix Matrix::mul(Matrix[QoreMatrix] other) [flags=RET_VALUE_ONLY,NAMED_ARGS] {
     if (m->cols() != other->rows()) {
         xsink->raiseException("KALMAN-DIMENSION-ERROR",
             "cannot multiply %lldx%lld by %lldx%lld (inner dims differ)",
@@ -304,7 +318,7 @@ Matrix Matrix::mul(Matrix[QoreMatrix] other) [flags=RET_VALUE_ONLY] {
     @return a new @ref Matrix of the same shape with each element
     multiplied by @c scalar.
 */
-Matrix Matrix::mul(float scalar) [flags=CONSTANT] {
+Matrix Matrix::mul(float scalar) [flags=CONSTANT,NAMED_ARGS] {
     return wrapMatrix(new QoreMatrix(m->get() * scalar), xsink);
 }
 

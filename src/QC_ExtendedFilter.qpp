@@ -294,7 +294,7 @@ qclass ExtendedFilter [arg=QoreExtendedFilter* ekf; ns=Qore::Kalman];
 
     @throw KALMAN-DIMENSION-ERROR either size is non-positive.
 */
-ExtendedFilter::constructor(int state_size, int measurement_size) {
+ExtendedFilter::constructor(int state_size, int measurement_size) [flags=NAMED_ARGS] {
     if (state_size <= 0) {
         xsink->raiseException("KALMAN-DIMENSION-ERROR",
             "state_size must be positive; got %lld", (long long)state_size);
@@ -313,7 +313,7 @@ ExtendedFilter::constructor(int state_size, int measurement_size) {
 /** @param Q @ref Matrix of shape state_size × state_size.
     @throw KALMAN-DIMENSION-ERROR Q has the wrong shape.
 */
-nothing ExtendedFilter::setQ(Matrix[QoreMatrix] Q) {
+nothing ExtendedFilter::setQ(Matrix[QoreMatrix] Q) [flags=NAMED_ARGS] {
     ekf->setQ(Q->get(), xsink);
 }
 
@@ -321,7 +321,7 @@ nothing ExtendedFilter::setQ(Matrix[QoreMatrix] Q) {
 /** @param R @ref Matrix of shape measurement_size × measurement_size.
     @throw KALMAN-DIMENSION-ERROR R has the wrong shape.
 */
-nothing ExtendedFilter::setR(Matrix[QoreMatrix] R) {
+nothing ExtendedFilter::setR(Matrix[QoreMatrix] R) [flags=NAMED_ARGS] {
     ekf->setR(R->get(), xsink);
 }
 
@@ -330,7 +330,7 @@ nothing ExtendedFilter::setR(Matrix[QoreMatrix] R) {
     @param P_init covariance, @ref Matrix of shape state_size × state_size.
     @throw KALMAN-DIMENSION-ERROR shapes do not match filter dimensions.
 */
-nothing ExtendedFilter::setState(Matrix[QoreMatrix] x_init, Matrix[QoreMatrix] P_init) {
+nothing ExtendedFilter::setState(Matrix[QoreMatrix] x_init, Matrix[QoreMatrix] P_init) [flags=NAMED_ARGS] {
     ekf->setState(x_init->get(), P_init->get(), xsink);
 }
 
@@ -340,7 +340,7 @@ nothing ExtendedFilter::setState(Matrix[QoreMatrix] x_init, Matrix[QoreMatrix] P
         @c predicted (state_size × 1 @ref Matrix) and @c jacobian
         (state_size × state_size @ref Matrix).
 */
-nothing ExtendedFilter::setPredictFunction(code f) {
+nothing ExtendedFilter::setPredictFunction(code f) [flags=NAMED_ARGS] {
     ekf->setPredictFunction(f, xsink);
 }
 
@@ -350,7 +350,7 @@ nothing ExtendedFilter::setPredictFunction(code f) {
         @c predicted (measurement_size × 1 @ref Matrix) and @c jacobian
         (measurement_size × state_size @ref Matrix).
 */
-nothing ExtendedFilter::setMeasurementFunction(code h) {
+nothing ExtendedFilter::setMeasurementFunction(code h) [flags=NAMED_ARGS] {
     ekf->setMeasurementFunction(h, xsink);
 }
 
@@ -369,7 +369,7 @@ nothing ExtendedFilter::predict() {
     @throw KALMAN-DIMENSION-ERROR observation has the wrong shape.
     @throw KALMAN-SINGULAR innovation covariance is singular.
 */
-nothing ExtendedFilter::update(Matrix[QoreMatrix] z) {
+nothing ExtendedFilter::update(Matrix[QoreMatrix] z) [flags=NAMED_ARGS] {
     ekf->update(z->get(), xsink);
 }
 

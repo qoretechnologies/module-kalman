@@ -31,6 +31,8 @@ public class MatrixTest inherits QUnit::Test {
             \negativeSingularTests());
         addTestCase("corner: 1x1 and empty matrices",
             \cornerTinyTests());
+        addTestCase("named argument calls",
+            \namedArgumentTests());
         set_return_value(main());
     }
 
@@ -182,6 +184,74 @@ public class MatrixTest inherits QUnit::Test {
         assertTrue(abs(reconstructed.at(0, 1) - 2.0) < 1e-10);
         assertTrue(abs(reconstructed.at(1, 0) - 2.0) < 1e-10);
         assertTrue(abs(reconstructed.at(1, 1) - 3.0) < 1e-10);
+    }
+
+    namedArgumentTests() {
+        Qore::Kalman::Matrix a = Qore::Kalman::Matrix::fromRows(rows: (
+            (1.0, 2.0),
+            (3.0, 4.0),
+        ));
+        Qore::Kalman::Matrix b = Qore::Kalman::Matrix::fromRows(rows: (
+            (5.0, 6.0),
+            (7.0, 8.0),
+        ));
+        Qore::Kalman::Matrix col = Qore::Kalman::Matrix::fromColumn(col: (9.0, 10.0));
+        assertEq(9.0, col.at(row: 0, col: 0));
+
+        Qore::Kalman::Matrix z = Qore::Kalman::Matrix::zeros(rows: 2, cols: 2);
+        assertEq((2, 2), z.shape());
+
+        Qore::Kalman::Matrix id = Qore::Kalman::Matrix::identity(n: 2);
+        assertEq(a.toRows(), a.mul(other: id).toRows(), "mul(other:) accepts named arguments");
+        assertEq(6.0, a.add(other: b).at(row: 0, col: 0), "add(other:) accepts named arguments");
+        assertEq(4.0, b.sub(other: a).at(row: 0, col: 0), "sub(other:) accepts named arguments");
+        assertEq(8.0, a.mul(scalar: 2.0).at(row: 1, col: 1), "mul(scalar:) accepts named arguments");
+
+        Qore::Kalman::LinearFilter kf = Qore::Kalman::newConstantVelocity2D(
+            dt: 0.1, sigma_a: 0.5, sigma_meas: 1.0);
+        assertEq(4, kf.stateSize());
+
+        Qore::Kalman::LinearFilter gps = Qore::Kalman::newGpsSmoother(
+            dt: 0.1, sigma_a: 0.5, sigma_gps_base: 1.0);
+        assertEq(2, gps.measurementSize());
+
+        Qore::Kalman::LinearFilter ca = Qore::Kalman::newConstantAcceleration2D(
+            dt: 0.1, sigma_j: 0.1, sigma_meas: 0.5);
+        assertEq(6, ca.stateSize());
+
+        Qore::Kalman::LinearFilter manual(options: <LinearFilterOptions>{
+            "state_size": 1,
+            "measurement_size": 1,
+            "control_size": 1,
+        });
+        Qore::Kalman::Matrix one = Qore::Kalman::Matrix::fromRows(rows: ((1.0,),));
+        manual.setF(F: one);
+        manual.setH(H: one);
+        manual.setB(B: one);
+        manual.setQ(Q: Qore::Kalman::Matrix::identity(n: 1).mul(scalar: 0.01));
+        manual.setR(R: Qore::Kalman::Matrix::identity(n: 1).mul(scalar: 0.1));
+        manual.setState(x_init: Qore::Kalman::Matrix::fromColumn(col: (0.0,)),
+            P_init: Qore::Kalman::Matrix::identity(n: 1));
+        manual.predict(u: Qore::Kalman::Matrix::fromColumn(col: (1.0,)));
+        manual.update(z: Qore::Kalman::Matrix::fromColumn(col: (1.1,)));
+        assertEq(1, manual.state().predict_count);
+        assertEq(1, manual.state().update_count);
+
+        Qore::Kalman::ExtendedFilter ekf(state_size: 1, measurement_size: 1);
+        ekf.setQ(Q: Qore::Kalman::Matrix::identity(n: 1).mul(scalar: 0.01));
+        ekf.setR(R: Qore::Kalman::Matrix::identity(n: 1).mul(scalar: 0.1));
+        ekf.setState(x_init: Qore::Kalman::Matrix::fromColumn(col: (0.0,)),
+            P_init: Qore::Kalman::Matrix::identity(n: 1));
+        ekf.setPredictFunction(f: hash<auto> sub (Qore::Kalman::Matrix x_cur) {
+            return {"predicted": x_cur, "jacobian": Qore::Kalman::Matrix::identity(n: 1)};
+        });
+        ekf.setMeasurementFunction(h: hash<auto> sub (Qore::Kalman::Matrix x_cur) {
+            return {"predicted": x_cur, "jacobian": Qore::Kalman::Matrix::identity(n: 1)};
+        });
+        ekf.predict();
+        ekf.update(z: Qore::Kalman::Matrix::fromColumn(col: (0.1,)));
+        assertEq(1, ekf.state().predict_count);
+        assertEq(1, ekf.state().update_count);
     }
 
     negativeDimensionTests() {
