@@ -9,6 +9,13 @@ set(VERSION_PATCH 0)
 # where to look first for cmake modules, before ${CMAKE_ROOT}/Modules/ is checked
 set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
 
+# Set this before loading Qore's macros so qdx and qjar use the same paths.
+# Preserve caller-supplied standard-library paths for QORE_MODULE_DIR_ONLY builds.
+set(QORE_MODULE_DIR_FOR_DOCS "${CMAKE_BINARY_DIR}")
+if(DEFINED ENV{QORE_MODULE_DIR} AND NOT "$ENV{QORE_MODULE_DIR}" STREQUAL "")
+    string(APPEND QORE_MODULE_DIR_FOR_DOCS ":$ENV{QORE_MODULE_DIR}")
+endif()
+
 find_package(Qore 0.9 REQUIRED)
 
 # Eigen's upstream ships its own CMake config (Eigen3Config.cmake). Prefer
@@ -33,9 +40,6 @@ else()
     find_package(Eigen3 REQUIRED)
     include_directories(${EIGEN3_INCLUDE_DIR})
 endif()
-
-# ensure qdx can find the kalman binary module and user modules when processing .qc files
-set(QORE_MODULE_DIR_FOR_DOCS "${CMAKE_BINARY_DIR}:${CMAKE_SOURCE_DIR}/qlib")
 
 include_directories(${CMAKE_SOURCE_DIR}/src)
 

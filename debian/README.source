@@ -1,0 +1,61 @@
+Debian/Ubuntu packaging for the Kalman module
+============================================
+
+The native module and compiler metadata belong to qore-kalman-module.
+HTML documentation and upstream example tests belong to the optional doc
+package. Debhelper creates matching debug symbols. Eigen headers are compiled
+into the module; its complete distribution copyright/license notices are
+included as Eigen-copyright. No Eigen headers or shared library are bundled.
+
+Build prerequisites and scope
+-----------------------------
+
+Use an isolated native environment with the packaged Qore runtime and
+libqore-dev, then install debian/control's Build-Depends. The qualification
+target is Ubuntu 26.04 amd64 with Qore 3.0 development packages. Other targets
+need matching SDKs and native tests. Cross builds are rejected because Qore
+tools execute during compilation. Use distribution Eigen >= 3.3.
+
+The build uses distribution compiler and hardening flags. Native Qore modules
+resolve Qore symbols at load time without linking libqore. debian/rules derives
+a minimum runtime and libqore SONAME package dependency from the installed SDK;
+dh_shlibdeps supplies other shared-library dependencies. The runtime is not
+Multi-Arch: same. No AOT user modules are shipped; ordinary dh_strip applies.
+
+Source and binary builds
+------------------------
+
+Use a fresh version for each changed upload. This snapshot follows 1.1.0.
+From a clean committed checkout:
+
+    version=1.1.0+git20260928.1
+    mkdir -p ../kalman-package-work
+    git archive --format=tar --prefix="qore-kalman-module-$version/" \
+        HEAD -- . ':!debian' | xz > \
+        "../kalman-package-work/qore-kalman-module_$version.orig.tar.xz"
+    tar -xf "../kalman-package-work/qore-kalman-module_$version.orig.tar.xz" \
+        -C ../kalman-package-work
+    cp -a debian "../kalman-package-work/qore-kalman-module-$version/"
+    cd "../kalman-package-work/qore-kalman-module-$version"
+    dpkg-buildpackage -S -us -uc
+
+Extract the .dsc into a fresh directory, then run dpkg-buildpackage -b -us -uc
+unprivileged with networking disabled. -B builds native/debug packages; -A
+builds documentation. nodoc in DEB_BUILD_OPTIONS suppresses HTML generation,
+and the nodoc build profile omits the doc package. Do not use nocheck for full
+qualification; repeated/profile builds may use it. noopt follows dpkg flags.
+
+Qualification and publication
+-----------------------------
+
+Run all four upstream suites: matrix operations and invalid dimensions,
+linear/extended filters, tracking factories and batch behavior. Installed
+tests copy only the scripts into a temporary directory, without source module
+paths. A fresh qcc executable tests matrix inversion, named arguments and a
+tracking filter update. No external service or optional Qore module is needed.
+
+Check Lintian, debug symbols and hardening, runtime installation without SDK
+or Eigen headers, documentation/debug coinstallation, dpkg -V, purge/reinstall,
+and byte reproducibility across different build paths and job counts. Retain
+source/package hashes, dependency inventories and logs. Testing-PPA publication
+is separate from approval for a final general release.

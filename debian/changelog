@@ -1,0 +1,8 @@
+qore-kalman-module (1.1.0+git20260928.1-0qore1~ubuntu26.04) resolute; urgency=medium
+
+  * Package the native Kalman module, compiler metadata and Eigen notices.
+  * Include API documentation, examples and matching debug symbols.
+  * Add offline build profiles and installed runtime/compiler tests.
+  * Preserve isolated standard-library paths for qdx and qjar documentation.
+
+ -- David Nichols <david@qore.org>  Tue, 29 Sep 2026 00:00:25 +0000

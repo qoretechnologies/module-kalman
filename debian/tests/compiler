@@ -1,0 +1,25 @@
+#!/bin/sh
+# Copyright (C) 2026 David Nichols
+# SPDX-License-Identifier: MIT
+set -eu
+unset QORE_MODULE_DIR QORE_MODULE_DIR_ONLY QORE_INCLUDE_DIR LD_LIBRARY_PATH LD_PRELOAD
+cd "$AUTOPKGTEST_TMP"
+cat > kalman-smoke.q <<'EOF'
+%modern
+%requires kalman
+Matrix matrix = Matrix::fromRows(((4.0, 7.0), (2.0, 6.0)));
+Matrix product = matrix.mul(matrix.inverse());
+if (abs(product.at(0, 0) - 1.0) > 1e-12 || abs(product.at(0, 1)) > 1e-12) {
+    throw "PACKAGE-TEST-ERROR", "Installed matrix inverse failed";
+}
+LinearFilter filter = newConstantVelocity2D(dt: 0.1, sigma_a: 0.5, sigma_meas: 1.0);
+filter.predict();
+filter.update(Matrix::fromColumn((1.0, 2.0)));
+hash<KalmanFilterState> state = filter.state();
+if (state.state.numRows() != 4 || state.state.at(0, 0) <= 0.0
+        || state.state.at(1, 0) <= 0.0) {
+    throw "PACKAGE-TEST-ERROR", "Installed tracking filter failed";
+}
+EOF
+/usr/bin/qcc -o kalman-smoke kalman-smoke.q
+./kalman-smoke

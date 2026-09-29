@@ -1,0 +1,38 @@
+Source: qore-kalman-module
+Section: interpreters
+Priority: optional
+Maintainer: David Nichols <david@qore.org>
+Build-Depends: debhelper-compat (= 13),
+               cmake (>= 3.5),
+               libeigen3-dev (>= 3.3),
+               libqore-dev (>= 3.0.0~),
+               qore (>= 3.0.0~)
+Build-Depends-Indep: doxygen <!nodoc>
+Standards-Version: 4.7.4
+Rules-Requires-Root: no
+Homepage: https://qore.org
+Vcs-Git: https://github.com/qoretechnologies/module-kalman.git
+Vcs-Browser: https://github.com/qoretechnologies/module-kalman
+
+Package: qore-kalman-module
+Architecture: any
+Depends: ${qore:Depends},
+         ${shlibs:Depends},
+         ${misc:Depends}
+Suggests: qore-kalman-module-doc
+Description: Kalman filters and matrix operations for Qore
+ This module provides immutable dense matrices, linear and extended Kalman
+ filters, batch processing and ready-to-use tracking model factories.
+ Compiler metadata is included for Qore's tools. Eigen template code is
+ compiled into the module; no separate Eigen runtime library is needed.
+
+Package: qore-kalman-module-doc
+Section: doc
+Architecture: all
+Multi-Arch: foreign
+Build-Profiles: <!nodoc>
+Depends: ${misc:Depends}
+Suggests: qore-kalman-module
+Description: documentation and examples for Qore's kalman module
+ This package contains the HTML API reference and example tests for Qore's
+ Kalman filtering module.

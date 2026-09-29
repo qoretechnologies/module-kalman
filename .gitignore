@@ -18,3 +18,15 @@ docs/latex/
 
 # OS
 .DS_Store
+
+# Debian package build products
+/obj-*/
+/debian/.debhelper/
+/debian/debhelper-build-stamp
+/debian/files
+/debian/*.substvars
+/debian/*.debhelper
+/debian/qore-kalman-module/
+/debian/qore-kalman-module-doc/
+/debian/tmp/
+**/__pycache__/

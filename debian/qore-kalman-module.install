@@ -1,0 +1,2 @@
+usr/lib/*/qore-modules/kalman-api-*.qmod
+usr/share/qore/metadata/kalman/*.meta.json
