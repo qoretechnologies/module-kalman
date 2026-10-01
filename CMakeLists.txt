@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.5...3.31)
 
 project(qore-kalman-module)
 
@@ -64,7 +64,7 @@ else()
     message(FATAL_ERROR "The compiler ${CMAKE_CXX_COMPILER} has no C++17 support. Please use a different C++ compiler.")
 endif()
 
-qore_wrap_qpp_value(QPP_SOURCES METALIST QPP_META_SOURCES ${QPP_SRC})
+qore_wrap_qpp_value(QPP_SOURCES DOXLIST QPP_DOX_SOURCES METALIST QPP_META_SOURCES ${QPP_SRC})
 
 set(module_name "kalman")
 
@@ -88,6 +88,10 @@ endif()
 if(DEFINED ENV{DOXYGEN_EXECUTABLE})
     set(DOXYGEN_EXECUTABLE $ENV{DOXYGEN_EXECUTABLE})
 endif()
+
+# Document Qore declarations rather than private C++ implementation bodies.
+set(MODULE_DOX_INPUT ${CMAKE_BINARY_DIR}/mainpage.dox
+    ${CMAKE_BINARY_DIR}/release-notes.dox ${QPP_DOX_SOURCES})
 
 # Eigen is header-only — no link-time library to pass in.
 qore_external_binary_module(${module_name} "${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}")

@@ -74,7 +74,7 @@ hashdecl KalmanVersionInfo {
     int patch;
 }
 
-//! @ref LinearFilter constructor options.
+//! @ref Qore::Kalman::LinearFilter constructor options.
 /** Fixes the shape of the filter. State and measurement sizes cannot
     be changed after construction.
 */
@@ -88,14 +88,14 @@ hashdecl LinearFilterOptions {
 }
 
 //! Snapshot of a Kalman filter's state at a point in time.
-/** Returned by @ref LinearFilter::state() and
-    @ref ExtendedFilter::state(). The pair (\c state, \c covariance)
+/** Returned by @ref Qore::Kalman::LinearFilter::state() and
+    @ref Qore::Kalman::ExtendedFilter::state(). The pair (\c state, \c covariance)
     fully describes the filter's belief about the underlying system.
 */
 hashdecl KalmanFilterState {
-    //! State vector as a column @ref Matrix (state_size x 1).
+    //! State vector as a column @ref Qore::Kalman::Matrix (state_size x 1).
     object state;
-    //! Covariance @ref Matrix (state_size x state_size).
+    //! Covariance @ref Qore::Kalman::Matrix (state_size x state_size).
     object covariance;
     //! Total number of updates applied since construction.
     int update_count;
@@ -152,10 +152,10 @@ hash<KalmanVersionInfo> get_kalman_info() [flags=RET_VALUE_ONLY] {
     return h.release();
 }
 
-//! Builds a pre-configured 2D constant-velocity @ref LinearFilter.
+//! Builds a pre-configured 2D constant-velocity @ref Qore::Kalman::LinearFilter.
 /** State: @c [x, y, vx, vy]. Observation: @c [x_obs, y_obs]. The
     returned filter has F, H, Q, R, and an initial state already set;
-    call @ref LinearFilter::predict() / @ref LinearFilter::update()
+    call @ref Qore::Kalman::LinearFilter::predict() / @ref Qore::Kalman::LinearFilter::update()
     directly without additional setup.
 
     Process noise matrix @c Q follows the standard CV-model form
@@ -172,7 +172,7 @@ hash<KalmanVersionInfo> get_kalman_info() [flags=RET_VALUE_ONLY] {
     @param sigma_a process-noise acceleration standard deviation (m/s²).
     @param sigma_meas measurement-noise position standard deviation (m).
 
-    @return a fully-configured @ref LinearFilter.
+    @return a fully-configured @ref Qore::Kalman::LinearFilter.
 
     @par Example:
     @code{.py}
@@ -210,7 +210,7 @@ LinearFilter newConstantVelocity2D(float dt, float sigma_a, float sigma_meas) [f
     return buildLinearFilter(4, 2, F, H, Q, R, x0, P0, xsink);
 }
 
-//! Builds a pre-configured 2D constant-acceleration @ref LinearFilter.
+//! Builds a pre-configured 2D constant-acceleration @ref Qore::Kalman::LinearFilter.
 /** State: @c [x, y, vx, vy, ax, ay]. Observation: @c [x_obs, y_obs].
     Useful when the tracked object undergoes meaningful acceleration
     phases — accelerating from a stop, braking, turning — and the
@@ -223,7 +223,7 @@ LinearFilter newConstantVelocity2D(float dt, float sigma_a, float sigma_meas) [f
     @param sigma_j process-noise jerk standard deviation (m/s³).
     @param sigma_meas measurement-noise position standard deviation (m).
 
-    @return a fully-configured @ref LinearFilter with state_size=6,
+    @return a fully-configured @ref Qore::Kalman::LinearFilter with state_size=6,
         measurement_size=2.
 */
 LinearFilter newConstantAcceleration2D(float dt, float sigma_j, float sigma_meas) [flags=RET_VALUE_ONLY,NAMED_ARGS] {
@@ -267,13 +267,13 @@ LinearFilter newConstantAcceleration2D(float dt, float sigma_j, float sigma_meas
     return buildLinearFilter(6, 2, F, H, Q, R, x0, P0, xsink);
 }
 
-//! Builds a pre-configured GPS-smoother @ref LinearFilter for noisy 2D position tracking.
+//! Builds a pre-configured GPS-smoother @ref Qore::Kalman::LinearFilter for noisy 2D position tracking.
 /** The "business use case" helper: 2D constant-velocity state
     @c [x, y, vx, vy] with a measurement-noise matrix that scales
     proportionally to HDOP (a user-supplied per-step HDOP proxy
     would be applied per-update by constructing a custom R; this
     factory sets the base R only, leaving the caller to update R via
-    @ref LinearFilter::setR() if HDOP varies per observation).
+    @ref Qore::Kalman::LinearFilter::setR() if HDOP varies per observation).
 
     Equivalent to @ref newConstantVelocity2D but with process-noise
     defaults tuned for GPS-smoothing scenarios (typical vehicle
@@ -288,7 +288,7 @@ LinearFilter newConstantAcceleration2D(float dt, float sigma_j, float sigma_meas
         HDOP = 1. Real per-fix σ = sigma_gps_base * HDOP; the caller
         uses @c setR() to scale when HDOP is known.
 
-    @return a fully-configured 2D-CV @ref LinearFilter tuned for GPS.
+    @return a fully-configured 2D-CV @ref Qore::Kalman::LinearFilter tuned for GPS.
 */
 LinearFilter newGpsSmoother(float dt, float sigma_a, float sigma_gps_base) [flags=RET_VALUE_ONLY,NAMED_ARGS] {
     double dt2 = dt * dt;
