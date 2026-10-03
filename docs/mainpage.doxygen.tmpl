@@ -5,21 +5,21 @@
     @section kalmanintro kalman Module Introduction
 
     The \c kalman module provides Kalman filter bindings on top of
-    [Eigen](https://eigen.tuxfamily.org) for the
+    <a href="https://eigen.tuxfamily.org">Eigen</a> for the
     <a href="../../lang/html/index.html">Qore programming language</a>.
 
     Kalman filters are the standard approach for denoising, tracking,
     sensor-fusing, and smoothing sequential noisy observations. Canonical
     applications:
 
-    - **Navigation / tracking** — GPS/INS fusion, vehicle / pedestrian
+    - <b>Navigation / tracking</b> — GPS/INS fusion, vehicle / pedestrian
       tracking, where noisy position measurements are smoothed against
       a motion model.
-    - **Control systems** — state estimation for closed-loop controllers
+    - <b>Control systems</b> — state estimation for closed-loop controllers
       that must react to filtered state, not raw sensor noise.
-    - **Industrial IoT** — sensor-signal denoising for predictive
+    - <b>Industrial IoT</b> — sensor-signal denoising for predictive
       maintenance, anomaly detection.
-    - **Finance** — smoothing noisy price series into trend estimates,
+    - <b>Finance</b> — smoothing noisy price series into trend estimates,
       volatility tracking.
 
     @section kalmanapi kalman Module API
@@ -43,11 +43,9 @@
       structured version info.
 
     Pre-baked model factories (1.1+):
-    - @ref Qore::Kalman::newConstantVelocity2D()
-      "newConstantVelocity2D()" — one-call 2D CV filter (state:
+    - @ref Qore::Kalman::newConstantVelocity2D() "newConstantVelocity2D()" — one-call 2D CV filter (state:
       @c [x, y, vx, vy]).
-    - @ref Qore::Kalman::newConstantAcceleration2D()
-      "newConstantAcceleration2D()" — one-call 2D CA filter
+    - @ref Qore::Kalman::newConstantAcceleration2D() "newConstantAcceleration2D()" — one-call 2D CA filter
       (state: @c [x, y, vx, vy, ax, ay]).
     - @ref Qore::Kalman::newGpsSmoother() "newGpsSmoother()" — 2D CV
       tuned for GPS smoothing, with @c sigma_gps_base parameterising
@@ -64,7 +62,7 @@
     Filter objects (@ref Qore::Kalman::LinearFilter "LinearFilter",
     @ref Qore::Kalman::ExtendedFilter "ExtendedFilter") hold
     mutable state (the current state vector and covariance matrix)
-    and must **not** be shared across threads without external
+    and must <b>not</b> be shared across threads without external
     locking. Typical usage is one filter per tracked object (per
     vehicle, per sensor, per stream) — no concurrency issue then.
 
