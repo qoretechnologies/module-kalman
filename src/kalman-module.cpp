@@ -31,6 +31,9 @@ static void kalman_module_init(QoreModuleInitContext& ctx, ExceptionSink& xsink)
 static void kalman_module_ns_init(QoreNamespace* rns, QoreNamespace* qns, ExceptionSink& xsink);
 static void kalman_module_delete();
 
+// the module's namespace; purged when the module is deleted (see QoreModuleInfo::ns)
+QoreNamespace KNS("Qore::Kalman");
+
 extern "C" DLLEXPORT void kalman_qore_module_desc(QoreModuleInfo& mod_info) {
     mod_info.name = "kalman";
     mod_info.version = PACKAGE_VERSION;
@@ -42,6 +45,10 @@ extern "C" DLLEXPORT void kalman_qore_module_desc(QoreModuleInfo& mod_info) {
     mod_info.init = kalman_module_init;
     mod_info.ns_init = kalman_module_ns_init;
     mod_info.del = kalman_module_delete;
+#ifdef QORE_HAS_MODULE_NS_PURGE
+    // the namespace is purged when the module is deleted, before the types are freed (see QoreModuleInfo::ns)
+    mod_info.ns = &KNS;
+#endif
     mod_info.license = QL_MIT;
     mod_info.license_str = "MIT";
 }
@@ -54,8 +61,6 @@ const TypedHashDecl* hashdeclKalmanFilterState = nullptr;
 // NOTE: the class pointers QC_* and ids CID_* are DEFINED by qpp in the
 // generated QC_*.cpp files — do not declare them here or the link step
 // produces duplicate-symbol errors.
-
-QoreNamespace KNS("Qore::Kalman");
 
 static void kalman_module_init(QoreModuleInitContext& ctx, ExceptionSink& xsink) {
     // hashdecls first (referenced by functions/class methods below)
