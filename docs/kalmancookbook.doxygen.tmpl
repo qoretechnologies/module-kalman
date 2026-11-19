@@ -1,0 +1,68 @@
+/* Copyright (C) 2026 Qore Technologies, s.r.o. */
+
+/** @page kalmancookbook State Estimation Cookbook
+
+    @tableofcontents
+
+    @section kalmanusage Basic usage
+
+    2D constant-velocity tracking: state is \c [x, y, vx, vy], we
+    observe \c [x, y] only.
+
+    @code{.py}
+%requires kalman
+
+Qore::Kalman::LinearFilter kf(<LinearFilterOptions>{
+    "state_size": 4,
+    "measurement_size": 2,
+});
+
+# Transition: x_{k+1} = x_k + vx * dt, y_{k+1} = y_k + vy * dt, velocities constant.
+float dt = 0.1;
+Qore::Kalman::Matrix F = Qore::Kalman::Matrix::fromRows((
+    (1.0, 0.0, dt,  0.0),
+    (0.0, 1.0, 0.0, dt),
+    (0.0, 0.0, 1.0, 0.0),
+    (0.0, 0.0, 0.0, 1.0),
+));
+
+# Observation: we see position directly, not velocity.
+Qore::Kalman::Matrix H = Qore::Kalman::Matrix::fromRows((
+    (1.0, 0.0, 0.0, 0.0),
+    (0.0, 1.0, 0.0, 0.0),
+));
+
+# Process noise: small drift on velocity channel (1 m/s² accel uncertainty).
+float sigma_a = 1.0;
+Qore::Kalman::Matrix Q = Qore::Kalman::Matrix::fromRows((
+    (dt * dt * dt * dt / 4.0, 0.0, dt * dt * dt / 2.0, 0.0),
+    (0.0, dt * dt * dt * dt / 4.0, 0.0, dt * dt * dt / 2.0),
+    (dt * dt * dt / 2.0, 0.0, dt * dt, 0.0),
+    (0.0, dt * dt * dt / 2.0, 0.0, dt * dt),
+)).mul(sigma_a * sigma_a);
+
+# Measurement noise: 5 m GPS CEP-ish.
+Qore::Kalman::Matrix R = Qore::Kalman::Matrix::fromRows((
+    (25.0, 0.0),
+    (0.0, 25.0),
+));
+
+kf.setF(F);
+kf.setH(H);
+kf.setQ(Q);
+kf.setR(R);
+kf.setState(
+    Qore::Kalman::Matrix::fromColumn((0.0, 0.0, 0.0, 0.0)),
+    Qore::Kalman::Matrix::identity(4).mul(100.0),
+);
+
+# Step loop: predict + update per observation.
+list<auto> observations = (...);  # list of (x_obs, y_obs) pairs
+foreach list<float> obs in (observations) {
+    kf.predict();
+    kf.update(Qore::Kalman::Matrix::fromColumn(obs));
+}
+hash<KalmanFilterState> final = kf.state();
+# final.state is the 4x1 smoothed state, final.covariance is the 4x4 P matrix
+    @endcode
+*/
