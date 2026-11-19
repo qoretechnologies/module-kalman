@@ -70,6 +70,7 @@ set(module_name "kalman")
 
 set(QORE_DOX_TMPL_SRC
     docs/mainpage.doxygen.tmpl
+    docs/kalmancookbook.doxygen.tmpl
     docs/release-notes.doxygen.tmpl
 )
 
@@ -91,7 +92,7 @@ endif()
 
 # Document Qore declarations rather than private C++ implementation bodies.
 set(MODULE_DOX_INPUT ${CMAKE_BINARY_DIR}/mainpage.dox
-    ${CMAKE_BINARY_DIR}/release-notes.dox ${QPP_DOX_SOURCES})
+    ${CMAKE_BINARY_DIR}/kalmancookbook.dox ${CMAKE_BINARY_DIR}/release-notes.dox ${QPP_DOX_SOURCES})
 
 # Eigen is header-only — no link-time library to pass in.
 qore_external_binary_module(${module_name} "${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}")
