@@ -2,10 +2,10 @@
 
     @tableofcontents
 
+    @section kalmanupcoming Upcoming release
+    - Staged installs can be removed using the installation manifest and the same DESTDIR used at install time.
+
     @section kalman_1_1 kalman Module Version 1.1
-    - The uninstall target honors DESTDIR and safely handles spaces and missing installed files.
-    - API documentation uses public Qore declarations and fully qualified filter references.
-    - Documentation builds preserve configured standard-library paths for isolated module lookup.
     - Pre-baked model factories for common tracking cases:
       @ref Qore::Kalman::newConstantVelocity2D()
       "newConstantVelocity2D()", @ref
@@ -21,9 +21,6 @@
       Checks for cooperative cancellation between iterations so
       long batches remain killable via @c cancel_thread() or
       @c SandboxManager::requestInterrupt().
-    - Release notes: UKF (unscented Kalman filter) and filter-state
-      serialization are planned for 1.2. 1.1 focuses on the business-
-      use-case helpers and the batch step operation.
 
     @section kalman_1_0 kalman Module Version 1.0
     - initial release

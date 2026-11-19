@@ -44,6 +44,10 @@ BUILD
     make
     sudo make install
 
+To uninstall from a staging directory, use the same build tree and DESTDIR:
+
+    DESTDIR=/path/to/stage cmake --build . --target uninstall
+
 Requires a Qore development installation (qore-config, qpp) and Eigen
 development headers.
 
